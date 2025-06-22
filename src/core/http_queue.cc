@@ -28,6 +28,8 @@ HttpQueue::erase(iterator signal_itr) {
     slot(*signal_itr);
 
   signal_itr->close();
+  signal_itr->cancel_slot_callbacks(torrent::this_thread::thread());
+
   base_type::erase(signal_itr);
 }
 
