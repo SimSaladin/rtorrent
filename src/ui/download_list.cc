@@ -241,6 +241,10 @@ DownloadList::receive_view_input(Input type) {
     }
     break;
 
+  case INPUT_FIND:
+    title = "find";
+    break;
+
   default:
     throw torrent::internal_error("DownloadList::receive_view_input(...) Invalid input type.");
   }
@@ -336,6 +340,11 @@ DownloadList::receive_exit_input(Input type) {
       }
       break;
 
+    case INPUT_FIND:
+      rpc::call_command("ui.find.term.set", rak::trim(input->str()), rpc::make_target());
+      rpc::call_command("ui.find.next", torrent::Object(), rpc::make_target());
+      break;
+
     default:
       throw torrent::internal_error("DownloadList::receive_exit_input(...) Invalid input type.");
     }
@@ -365,6 +374,9 @@ DownloadList::setup_keys() {
 
   m_uiArray[DISPLAY_DOWNLOAD_LIST]->bindings()[KEY_RIGHT] =
     m_uiArray[DISPLAY_DOWNLOAD_LIST]->bindings()[control->ui()->navigation_key(RT_KEY_RIGHT)] = std::bind(&DownloadList::activate_display, this, DISPLAY_DOWNLOAD);
+ 
+  // Replace Ctrl-F binding for setting 'ui.find.term'
+  m_uiArray[DISPLAY_DOWNLOAD_LIST]->bindings()['F' - '@'] = std::bind(&DownloadList::receive_view_input, this, INPUT_FIND);
   m_uiArray[DISPLAY_DOWNLOAD_LIST]->bindings()[control->ui()->navigation_key(RT_KEY_DISPLAY_LOG)] = std::bind(&DownloadList::activate_display, this, DISPLAY_LOG);
 }
 
