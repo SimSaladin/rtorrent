@@ -214,8 +214,10 @@ Canvas::print(unsigned int x, unsigned int y, const char* str, ...) {
 
   if (!m_daemon) {
     va_start(arglist, str);
+    if (y < height()) {
     wmove(m_window, y, x);
     vw_printw(m_window, const_cast<char*>(str), arglist);
+    }
     va_end(arglist);
   }
 }

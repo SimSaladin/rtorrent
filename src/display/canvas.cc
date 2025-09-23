@@ -84,6 +84,8 @@ Canvas::initialize() {
 
   if (!m_daemon) {
     initscr();
+  extern void ui_pyroscope_canvas_init();
+  ui_pyroscope_canvas_init();
     start_color();
     use_default_colors();
     Canvas::build_colors();
