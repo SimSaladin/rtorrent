@@ -52,6 +52,7 @@ public:
     INPUT_CHANGE_DIRECTORY,
     INPUT_COMMAND,
     INPUT_FILTER,
+    INPUT_FIND,
     INPUT_EOI
   } Input;
 
