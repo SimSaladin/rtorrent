@@ -36,8 +36,6 @@
 #include "core/view_manager.h"
 #include "rpc/parse.h"
 #include <torrent/tracker/tracker.h>
-//#include "tracker/tracker_list.h" // TODO
-//#include "download/download_main.h" // TODO
 #include "ui/root.h"
 #include "ui/download_list.h"
 #include "ui/element_base.h"
@@ -64,9 +62,6 @@ int log_messages_fd = -1;
 // return the "main" tracker for this download item
 std::optional<torrent::tracker::Tracker> get_active_tracker(core::Download* download) {
     torrent::tracker::TrackerControllerWrapper tc = download->tracker_controller();
-    //torrent::TrackerList* tl = item->main()->tracker_list();
-    //torrent::tracker::Tracker tracker;
-    //torrent::tracker::Tracker fallback;
     auto tc_size = tc.size();
     auto result = -1;
     auto fallback = -1;
