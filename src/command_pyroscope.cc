@@ -508,12 +508,10 @@ torrent::Object cmd_string_strip(int where, const torrent::Object::list_type& ar
         // Strip whitespace
         if (where <= 0) {
             text.erase(text.begin(),
-                       std::find_if(text.begin(), text.end(),
-                                    std::not1(std::ptr_fun<int, int>(std::isspace))));
+                       std::find_if(text.begin(), text.end(), [](int ch) { return !std::isspace(ch); }));
         }
         if (where >= 0) {
-            text.erase(std::find_if(text.rbegin(), text.rend(),
-                                    std::not1(std::ptr_fun<int, int>(std::isspace))).base(),
+            text.erase(std::find_if(text.rbegin(), text.rend(), [](int ch) { return !std::isspace(ch); }).base(),
                        text.end());
         }
     } else {
