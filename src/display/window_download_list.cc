@@ -86,6 +86,8 @@ WindowDownloadList::redraw() {
 
   m_canvas->print(0, 0, "%s", ("[View: " + m_view->name() + (m_view->get_filter_temp().is_empty() ? "" : " (filtered)") + "]").c_str());
 
+  bool ui_pyroscope_download_list_redraw(Window* window, display::Canvas* canvas, core::View* view);
+  if (ui_pyroscope_download_list_redraw(this, m_canvas, m_view)) return;
   if (m_view->empty_visible() || m_canvas->width() < 5 || m_canvas->height() < 2)
     return;
 
@@ -146,6 +148,8 @@ WindowDownloadList::redraw() {
       m_canvas->print(0, pos, "%c %s", focus_char, buffer.data());
       m_canvas->set_attr(2, pos++, -1, focus_color);
 
+      void ui_pyroscope_download_list_redraw_item(Window* window, display::Canvas* canvas, core::View* view, int pos, Range& range);
+      ui_pyroscope_download_list_redraw_item(this, m_canvas, m_view, pos, range);
       range.first++;
     }
 
@@ -158,6 +162,8 @@ WindowDownloadList::redraw() {
       m_canvas->print(0, pos, "%c %s", focus_char, buffer.data());
       m_canvas->set_attr(2, pos++, -1, attr_color.first, attr_color.second);
 
+      void ui_pyroscope_download_list_redraw_item(Window* window, display::Canvas* canvas, core::View* view, int pos, Range& range);
+      ui_pyroscope_download_list_redraw_item(this, m_canvas, m_view, pos, range);
       range.first++;
     }
   }

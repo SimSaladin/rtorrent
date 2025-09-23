@@ -35,6 +35,7 @@ libsub_root_a_SOURCES = \
 	display/manager.h \
 	display/utils.cc \
 	display/utils.h \
+	ui_pyroscope.cc \
 	display/text_element.h \
 	display/text_element_list.cc \
 	display/text_element_list.h \

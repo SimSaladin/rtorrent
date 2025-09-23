@@ -54,6 +54,7 @@ void initialize_command_throttle();
 void initialize_command_tracker();
 void initialize_command_scheduler();
 void initialize_command_ui();
+void initialize_command_ui_pyroscope();
 
 void
 initialize_commands() {
@@ -68,6 +69,7 @@ initialize_commands() {
   initialize_command_file();
   initialize_command_ip();
   initialize_command_peer();
+  initialize_command_ui_pyroscope();
   initialize_command_throttle();
   initialize_command_tracker();
   initialize_command_scheduler();
