@@ -378,10 +378,18 @@ print_status_info(char* first, char* last) {
   first = print_buffer(first, last, " [Port: %i]", (unsigned int)torrent::config::network_config()->listen_port());
 
   auto local_address = torrent::config::network_config()->local_address();
+  auto local_address_in6 = torrent::config::network_config()->local_address_in6();
 
-  if (!torrent::sa_is_any(local_address.get())) {
-    first = print_buffer(first, last, " [Local ");
-    first = print_address(first, last, local_address.get());
+  if (!torrent::sa_is_any(local_address.get()) || !torrent::sin6_is_any(local_address_in6.get())) {
+    first = print_buffer(first, last, " [Local");
+    if (!torrent::sa_is_any(local_address.get())) {
+        first = print_buffer(first, last, " ");
+        first = print_address(first, last, local_address.get());
+    }
+    if (!torrent::sin6_is_any(local_address_in6.get())) {
+        first = print_buffer(first, last, " ");
+        first = print_address(first, last, reinterpret_cast<const sockaddr*>(local_address_in6.get()));
+    }
     first = print_buffer(first, last, "]");
   }
 

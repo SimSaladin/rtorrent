@@ -22,15 +22,11 @@ static std::string tracker_type_to_str(torrent::tracker::Tracker t) {
         case torrent::TRACKER_NONE:
             return "NONE";
             break;
-        case torrent::TRACKER_HTTP: {
-            auto is_ipv6 = t.state().flags() & torrent::tracker::TrackerState::flag_ipv6;
-            if (is_ipv6) {
-                return "HTTP/IPv6";
-            } else {
-                return "HTTP/IPv4";
-            }
+        case torrent::TRACKER_HTTP:
+            return std::string("HTTP") +
+                (t.state().is_announce_ipv6() ? "/IPv6" : "/IPv4") +
+                (t.state().is_inet_any() ? "/*" : (t.state().is_inet6_only() ? "/6" : "/4"));
             break;
-                                    }
         case torrent::TRACKER_UDP:
             return "UDP";
             break;
