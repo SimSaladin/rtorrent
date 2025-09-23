@@ -48,6 +48,7 @@ void initialize_command_ip();
 void initialize_command_peer();
 void initialize_command_local();
 void initialize_command_logging();
+void initialize_command_pyroscope();
 void initialize_command_network();
 void initialize_command_groups();
 void initialize_command_throttle();
@@ -59,6 +60,7 @@ void initialize_command_ui_pyroscope();
 void
 initialize_commands() {
   initialize_command_dynamic();
+  initialize_command_pyroscope();
   initialize_command_events();
   initialize_command_network();
   initialize_command_groups();

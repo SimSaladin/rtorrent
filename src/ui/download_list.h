@@ -96,6 +96,7 @@ public:
   void                disable();
 
   void                activate_display(Display d);
+  ElementBase*        display(Display d) { return d < DISPLAY_MAX_SIZE ? m_uiArray[d] : 0; }
 
   core::View*         current_view();
   void                set_current_view(const std::string& name);
