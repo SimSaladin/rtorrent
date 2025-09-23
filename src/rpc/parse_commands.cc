@@ -183,6 +183,7 @@ parse_command_file(const std::string& path) {
     }
 
   } catch (torrent::input_error& e) {
+    if (!strcmp(e.what(), "import.return")) return true;
     snprintf(buffer, 2048, "Error in option file: %s:%u: %s", path.c_str(), lineNumber, e.what());
 
     throw torrent::input_error(buffer);
