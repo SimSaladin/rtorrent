@@ -462,7 +462,7 @@ static void decorate_download_title(Window* window, display::Canvas* canvas, cor
         title_col = (active ? D_INFO(item)->down_rate()->rate() ?
                      ps::COL_LEECHING : ps::COL_INCOMPLETE : ps::COL_QUEUED) + offset;
     canvas->set_attr(x_title, pos, -1, canvas->attr_map().at(title_col) | focus_attr, title_col);
-    if (hilen && hilite != std::string::npos && (x_title + hilite) < int(canvas->width())) {
+    if (hilen && hilite != std::string::npos && (x_title + hilite) < canvas->width()) {
         canvas->set_attr(x_title + hilite, pos, std::min(hilen, int(canvas->width()) - x_title - hilite),
                          (canvas->attr_map().at(title_col) | focus_attr | A_REVERSE) ^ A_BOLD, title_col);
     }

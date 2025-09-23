@@ -948,15 +948,15 @@ void initialize_command_pyroscope() {
     */
 
     // string.* group
-    CMD2_ANY_LIST("string.len", &cmd_string_len);
-    CMD2_ANY_LIST("string.join", &cmd_string_join);
-    CMD2_ANY_LIST("string.split", &cmd_string_split);
-    CMD2_ANY_LIST("string.substr", &cmd_string_substr);
-    CMD2_ANY_LIST("string.shorten", &cmd_string_shorten);
-    CMD2_ANY_LIST("string.contains", &cmd_string_contains);
-    CMD2_ANY_LIST("string.contains_i", &cmd_string_contains_i);
-    CMD2_ANY_LIST("string.map", &cmd_string_map);
-    CMD2_ANY_LIST("string.replace", &cmd_string_replace);
+    CMD2_ANY_LIST("string.len",         &cmd_string_len);
+    CMD2_ANY_LIST("string.join",        &cmd_string_join);
+    CMD2_ANY_LIST("string.split",       &cmd_string_split);
+    CMD2_ANY_LIST("string.substr",      &cmd_string_substr);
+    CMD2_ANY_LIST("string.shorten",     &cmd_string_shorten);
+    CMD2_ANY_LIST("string.contains",    &cmd_string_contains);
+    CMD2_ANY_LIST("string.contains_i",  &cmd_string_contains_i);
+    CMD2_ANY_LIST("string.map",         &cmd_string_map);
+    CMD2_ANY_LIST("string.replace",     &cmd_string_replace);
     CMD2_ANY_LIST("string.equals",      std::bind(&cmd_string_compare, 0, std::placeholders::_2));
     CMD2_ANY_LIST("string.startswith",  std::bind(&cmd_string_compare, 1, std::placeholders::_2));
     CMD2_ANY_LIST("string.endswith",    std::bind(&cmd_string_compare, 2, std::placeholders::_2));
@@ -967,44 +967,39 @@ void initialize_command_pyroscope() {
     CMD2_ANY_LIST("string.rpad",        std::bind(&cmd_string_pad, true,  std::placeholders::_2));
 
     // array.* group
-    CMD2_ANY_LIST("array.at", &cmd_array_at);
+    CMD2_ANY_LIST("array.at",           &cmd_array_at);
 
     // ui.focus.* – quick paging
     CMD2_ANY("ui.focus.home", _cxxstd_::bind(&cmd_ui_focus_home));
-    CMD2_ANY("ui.focus.end", _cxxstd_::bind(&cmd_ui_focus_end));
+    CMD2_ANY("ui.focus.end",  _cxxstd_::bind(&cmd_ui_focus_end));
     CMD2_ANY("ui.focus.pgup", _cxxstd_::bind(&cmd_ui_focus_pgup));
     CMD2_ANY("ui.focus.pgdn", _cxxstd_::bind(&cmd_ui_focus_pgdn));
     //CMD2_VAR_VALUE("ui.focus.page_size", 50);
 
     // system.has.*
-    CMD2_ANY_STRING("system.has", _cxxstd_::bind(&cmd_system_has, _cxxstd_::placeholders::_2));
-    CMD2_ANY("system.has.list", _cxxstd_::bind(&cmd_system_has_list));
-    CMD2_ANY("system.has.private_methods", _cxxstd_::bind(&cmd_system_has_methods, false));
-    CMD2_ANY("system.has.public_methods", _cxxstd_::bind(&cmd_system_has_methods, true));
+    CMD2_ANY_STRING("system.has",              _cxxstd_::bind(&cmd_system_has, _cxxstd_::placeholders::_2));
+    CMD2_ANY("system.has.list",                _cxxstd_::bind(&cmd_system_has_list));
+    CMD2_ANY("system.has.private_methods",     _cxxstd_::bind(&cmd_system_has_methods, false));
+    CMD2_ANY("system.has.public_methods",      _cxxstd_::bind(&cmd_system_has_methods, true));
     CMD2_ANY("system.client_version.as_value", _cxxstd_::bind(&cmd_system_client_version_as_value));
 
     // d.custom.* extensions
-    CMD2_DL_LIST("d.custom.set_if_z", _cxxstd_::bind(&cmd_d_custom_set_if_z,
-                                                     _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
-    CMD2_DL_LIST("d.custom.erase", _cxxstd_::bind(&cmd_d_custom_erase,
-                                                  _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
-    CMD2_DL_STRING("d.custom.toggle",  _cxxstd_::bind(&cmd_d_custom_toggle,
-                                                      _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
-    CMD2_DL_STRING("d.custom.as_value",  _cxxstd_::bind(&retrieve_d_custom_as_value,
-                                                        _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
+    CMD2_DL_LIST("d.custom.set_if_z",    _cxxstd_::bind(&cmd_d_custom_set_if_z,      _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
+    CMD2_DL_LIST("d.custom.erase",       _cxxstd_::bind(&cmd_d_custom_erase,         _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
+    CMD2_DL_STRING("d.custom.toggle",    _cxxstd_::bind(&cmd_d_custom_toggle,        _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
+    CMD2_DL_STRING("d.custom.as_value",  _cxxstd_::bind(&retrieve_d_custom_as_value, _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
 
     // Misc commands
     CMD2_ANY("ui.bind_key", &apply_ui_bind_key);
     CMD2_VAR_VALUE("ui.bind_key.verbose", 1);
-    CMD2_ANY("throttle.names", _cxxstd_::bind(&cmd_throttle_names));
-    CMD2_DL("d.tracker_domain", _cxxstd_::bind(&cmd_d_tracker_domain, _cxxstd_::placeholders::_1));
+    CMD2_ANY("throttle.names",             _cxxstd_::bind(&cmd_throttle_names));
+    CMD2_DL("d.tracker_domain",            _cxxstd_::bind(&cmd_d_tracker_domain,         _cxxstd_::placeholders::_1));
     CMD2_DL("d.tracker_scrape.downloaded", _cxxstd_::bind(&cmd_d_tracker_scrape_info, 1, _cxxstd_::placeholders::_1));
-    CMD2_DL("d.tracker_scrape.complete", _cxxstd_::bind(&cmd_d_tracker_scrape_info, 2, _cxxstd_::placeholders::_1));
+    CMD2_DL("d.tracker_scrape.complete",   _cxxstd_::bind(&cmd_d_tracker_scrape_info, 2, _cxxstd_::placeholders::_1));
     CMD2_DL("d.tracker_scrape.incomplete", _cxxstd_::bind(&cmd_d_tracker_scrape_info, 3, _cxxstd_::placeholders::_1));
-
-    CMD2_ANY_STRING("log.messages", _cxxstd_::bind(&cmd_log_messages, _cxxstd_::placeholders::_2));
-    CMD2_ANY_P("import.return", &cmd_import_return);
-    CMD2_ANY("do", _cxxstd_::bind(&cmd_do, _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
+    CMD2_ANY_STRING("log.messages",        _cxxstd_::bind(&cmd_log_messages, _cxxstd_::placeholders::_2));
+    CMD2_ANY_P("import.return",            &cmd_import_return);
+    CMD2_ANY("do",                         _cxxstd_::bind(&cmd_do, _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
 
     // List capabilities of this build
     add_capability("system.has");         // self
