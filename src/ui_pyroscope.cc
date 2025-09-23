@@ -52,8 +52,8 @@ python -c 'print u"\u22c5 \u22c5\u22c5 \u201d \u2019 \u266f \u2622 \u260d \u2318
 #include "rpc/parse.h"
 
 // from command_pyroscope.cc
-extern torrent::tracker::Tracker* get_active_tracker(torrent::Download* item);
-extern std::string get_active_tracker_domain(torrent::Download* item);
+extern torrent::tracker::Tracker* get_active_tracker(core::Download* item);
+extern std::string get_active_tracker_domain(core::Download* item);
 
 
 #define CANVAS_POS_1ST_ITEM 2
@@ -428,7 +428,7 @@ int64_t cmd_d_message_alert(core::Download* d) {
 }
 
 
-std::string get_active_tracker_alias(torrent::Download* item) {
+std::string get_active_tracker_alias(core::Download* item) {
     std::string url = get_active_tracker_domain(item);
     if (!url.empty()) {
         std::string alias = tracker_aliases[url];
@@ -440,7 +440,7 @@ std::string get_active_tracker_alias(torrent::Download* item) {
 
 
 torrent::Object cmd_d_tracker_alias(core::Download* download) {
-    return get_active_tracker_alias(download->download());
+    return get_active_tracker_alias(download);
 }
 
 
@@ -469,7 +469,7 @@ static void decorate_download_title(Window* window, display::Canvas* canvas, cor
 
     // show label for active tracker (a/k/a in focus tracker)
     if (int(canvas->width()) <= x_title + NAME_RESERVED_WIDTH + 3) return;
-    std::string url = get_active_tracker_alias((*range.first)->download());
+    std::string url = get_active_tracker_alias(*range.first);
     if (url.empty()) return;
 
     // shorten label if too long

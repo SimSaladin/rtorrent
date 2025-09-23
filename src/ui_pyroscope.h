@@ -6,8 +6,6 @@
 
 namespace ps {
 
-// #define COL_SYS_BASE 90
-
 enum AlertKind {
     // Sync changes to cmd-ref.html#term-d-message-alert
     ALERT_NORMAL,
@@ -23,7 +21,6 @@ enum AlertKind {
     ALERT_DNS,
     ALERT_MAX
 };
-
 
 enum ColorKPS {
  COL_DEFAULT = display::RCOLOR_NCURSES_DEFAULT,

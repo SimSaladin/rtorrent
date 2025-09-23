@@ -17,6 +17,32 @@ WindowTrackerList::WindowTrackerList(core::Download* d, unsigned int* focus) :
   m_focus(focus) {
 }
 
+static std::string tracker_type_to_str(torrent::tracker::Tracker t) {
+    switch (t.type()) {
+        case torrent::TRACKER_NONE:
+            return "NONE";
+            break;
+        case torrent::TRACKER_HTTP: {
+            auto is_ipv6 = t.state().flags() & torrent::tracker::TrackerState::flag_ipv6;
+            if (is_ipv6) {
+                return "HTTP/IPv6";
+            } else {
+                return "HTTP/IPv4";
+            }
+            break;
+                                    }
+        case torrent::TRACKER_UDP:
+            return "UDP";
+            break;
+        case torrent::TRACKER_DHT:
+            return "DHT";
+            break;
+        default:
+            return "UNK";
+            break;
+    };
+}
+
 void
 WindowTrackerList::redraw() {
   // TODO: Make this depend on tracker signal.
@@ -46,8 +72,9 @@ WindowTrackerList::redraw() {
     if (tracker.group() == group)
       m_canvas->print(0, pos, "%2i:", group++);
 
-    m_canvas->print(4, pos++, "%s",
-                    tracker.url().c_str());
+    m_canvas->print(4, pos++, "%s (%s)",
+                    tracker.url().c_str(),
+                    tracker_type_to_str(tracker).c_str());
 
     if (pos < m_canvas->height()) {
       const char* state;
@@ -61,7 +88,7 @@ WindowTrackerList::redraw() {
 
       auto tracker_state = tracker.state();
 
-      m_canvas->print(0, pos++, "%s Id: %s Counters: %uf / %us (%u) %s S/L/D: %u/%u/%u (%u/%u)",
+      m_canvas->print(0, pos++, "%s Id: %s Counters: %2uf / %3us (%3u) %s S/L/D: %3u/%3u/%3u (%u/%u)",
                       state,
                       rak::copy_escape_html(tracker.tracker_id()).c_str(),
                       tracker_state.failed_counter(),
