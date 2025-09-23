@@ -25,6 +25,7 @@
 #include <set>
 #include <stdlib.h>
 #include <unistd.h>
+#include <optional>
 #include <fcntl.h>
 #include <rak/path.h>
 #include <rak/algorithm.h>
@@ -35,8 +36,8 @@
 #include "core/view_manager.h"
 #include "rpc/parse.h"
 #include <torrent/tracker/tracker.h>
-#include "tracker/tracker_list.h"
-#include "download/download_main.h"
+//#include "tracker/tracker_list.h" // TODO
+//#include "download/download_main.h" // TODO
 #include "ui/root.h"
 #include "ui/download_list.h"
 #include "ui/element_base.h"
@@ -61,33 +62,39 @@ int log_messages_fd = -1;
 
 
 // return the "main" tracker for this download item
-torrent::tracker::Tracker* get_active_tracker(torrent::Download* item) {
-    torrent::TrackerList* tl = item->main()->tracker_list();
-    torrent::tracker::Tracker* tracker = 0;
-    torrent::tracker::Tracker* fallback = 0;
+std::optional<torrent::tracker::Tracker> get_active_tracker(core::Download* download) {
+    torrent::tracker::TrackerControllerWrapper tc = download->tracker_controller();
+    //torrent::TrackerList* tl = item->main()->tracker_list();
+    //torrent::tracker::Tracker tracker;
+    //torrent::tracker::Tracker fallback;
+    auto tc_size = tc.size();
+    auto result = -1;
+    auto fallback = -1;
 
-    for (size_t trkidx = 0; trkidx < tl->size(); trkidx++) {
-        tracker = &tl->at(trkidx);
-        if (tracker->is_usable() && tracker->type() == torrent::tracker_enum::TRACKER_HTTP) {
-            if (!fallback) fallback = tracker;
-            if (tracker->state().scrape_complete() || tracker->state().scrape_incomplete()) {
+    for (size_t trkidx = 0; trkidx < tc_size; trkidx++) {
+        auto tracker = tc.at(trkidx);
+        if (tracker.is_usable() && tracker.type() == torrent::tracker_enum::TRACKER_HTTP) {
+            if (fallback < 0) fallback = trkidx;
+            if (tracker.state().scrape_complete() || tracker.state().scrape_incomplete()) {
+                result = trkidx;
                 break;
             }
         }
-        tracker = 0;
+        result = -1;
     }
-    if (!tracker && tl->size()) tracker = fallback ? fallback : &tl->at(0);
+    if (result < 0 && tc_size > 0)
+        result = fallback ? fallback : 0;
 
-    return tracker;
+    return result < 0 ? std::nullopt : std::make_optional(tc.at(result));
 }
 
 
 // return the domain name of the "main" tracker of the given download item
-std::string get_active_tracker_domain(torrent::Download* item) {
+std::string get_active_tracker_domain(core::Download* download) {
     std::string url;
-    torrent::tracker::Tracker* tracker = get_active_tracker(item);
+    std::optional<torrent::tracker::Tracker> tracker = get_active_tracker(download);
 
-    if (tracker && !tracker->url().empty()) {
+    if (tracker.has_value() && !tracker->url().empty()) {
         url = tracker->url();
 
         // snip url to domain name
@@ -113,11 +120,11 @@ std::string get_active_tracker_domain(torrent::Download* item) {
 
 
 // return various scrape information of the "main" tracker for this download item
-int64_t get_active_tracker_scrape_info(const int operation, torrent::Download* item) {
+int64_t get_active_tracker_scrape_info(const int operation, core::Download* download) {
     int64_t scrape_num = 0;
-    torrent::tracker::Tracker* tracker = get_active_tracker(item);
+    std::optional<torrent::tracker::Tracker> tracker = get_active_tracker(download);
 
-    if (tracker) {
+    if (tracker.has_value()) {
         switch (operation) {
             case 1:
                 scrape_num = tracker->state().scrape_downloaded();
@@ -900,12 +907,12 @@ torrent::Object cmd_system_client_version_as_value() {
 
 
 torrent::Object cmd_d_tracker_domain(core::Download* download) {
-    return get_active_tracker_domain(download->download());
+    return get_active_tracker_domain(download);
 }
 
 
 torrent::Object cmd_d_tracker_scrape_info(const int operation, core::Download* download) {
-    return get_active_tracker_scrape_info(operation, download->download());
+    return get_active_tracker_scrape_info(operation, download);
 }
 
 
