@@ -218,6 +218,8 @@ initialize_command_network() {
   CMD2_ANY_STRING_V("network.bind_address.set",      std::bind(&core::Manager::set_bind_address, control->core(), std::placeholders::_2));
   CMD2_ANY         ("network.local_address",         std::bind(&torrent::net::NetworkConfig::local_address_str, network_config));
   CMD2_ANY_STRING_V("network.local_address.set",     std::bind(&core::Manager::set_local_address, control->core(), std::placeholders::_2));
+  CMD2_ANY         ("network.local_inet6_address",     std::bind(&torrent::net::NetworkConfig::local_address_in6_str, network_config));
+  CMD2_ANY_STRING_V("network.local_inet6_address.set", std::bind(&core::Manager::set_local_inet6_address, control->core(), std::placeholders::_2));
   CMD2_ANY         ("network.proxy_address",         std::bind(&torrent::net::NetworkConfig::proxy_address_str, network_config));
   CMD2_ANY_STRING_V("network.proxy_address.set",     std::bind(&core::Manager::set_proxy_address, control->core(), std::placeholders::_2));
 

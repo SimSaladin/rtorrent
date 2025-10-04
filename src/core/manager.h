@@ -63,6 +63,7 @@ public:
 
   void                set_bind_address(const std::string& addr);
   void                set_local_address(const std::string& addr);
+  void                set_local_inet6_address(const std::string& addr);
   void                set_proxy_address(const std::string& addr);
 
   void                shutdown(bool force);

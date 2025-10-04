@@ -221,12 +221,30 @@ Manager::set_local_address(const std::string& addr) {
   int err;
   rak::address_info* ai;
 
-  if ((err = rak::address_info::get_address_info(addr.c_str(), PF_INET, SOCK_STREAM, &ai)) != 0 &&
-      (err = rak::address_info::get_address_info(addr.c_str(), PF_INET6, SOCK_STREAM, &ai)) != 0)
+  if ((err = rak::address_info::get_address_info(addr.c_str(), PF_INET, SOCK_STREAM, &ai)) != 0)
     throw torrent::input_error("Could not set local address: " + std::string(rak::address_info::strerror(err)) + ".");
 
   try {
     torrent::config::network_config()->set_local_address(ai->c_addrinfo()->ai_addr);
+
+    rak::address_info::free_address_info(ai);
+
+  } catch (torrent::input_error& e) {
+    rak::address_info::free_address_info(ai);
+    throw e;
+  }
+}
+
+void
+Manager::set_local_inet6_address(const std::string& addr) {
+  int err;
+  rak::address_info* ai;
+
+  if ((err = rak::address_info::get_address_info(addr.c_str(), PF_INET6, SOCK_STREAM, &ai)) != 0)
+    throw torrent::input_error("Could not set local address: " + std::string(rak::address_info::strerror(err)) + ".");
+
+  try {
+    torrent::config::network_config()->set_local_address_in6(reinterpret_cast<const sockaddr_in6*>(ai->c_addrinfo()->ai_addr));
 
     rak::address_info::free_address_info(ai);
 
