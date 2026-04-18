@@ -90,6 +90,37 @@ private:
   slot_string         m_slot_open_uri;
 };
 
+template <typename Sequence>
+Sequence trim_begin(const Sequence& seq) {
+  if (seq.empty() || !std::isspace(*seq.begin()))
+    return seq;
+
+  typename Sequence::size_type pos = 0;
+
+  while (pos != seq.length() && std::isspace(seq[pos]))
+    pos++;
+
+  return seq.substr(pos, seq.length() - pos);
+}
+
+template <typename Sequence>
+Sequence trim_end(const Sequence& seq) {
+  if (seq.empty() || !std::isspace(*(--seq.end())))
+    return seq;
+
+  typename Sequence::size_type pos = seq.size();
+
+  while (pos != 0 && std::isspace(seq[pos - 1]))
+    pos--;
+
+  return seq.substr(0, pos);
+}
+
+template <typename Sequence>
+Sequence trim(const Sequence& seq) {
+  return trim_begin(trim_end(seq));
+}
+
 }
 
 #endif

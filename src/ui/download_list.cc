@@ -337,7 +337,7 @@ DownloadList::receive_exit_input(Input type) {
       break;
 
     case INPUT_FIND:
-      rpc::call_command("ui.find.term.set", rak::trim(input->str()), rpc::make_target());
+      rpc::call_command("ui.find.term.set", trim(input->str()), rpc::make_target());
       rpc::call_command("ui.find.next", torrent::Object(), rpc::make_target());
       break;
 

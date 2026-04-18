@@ -27,8 +27,6 @@
 #include <unistd.h>
 #include <optional>
 #include <fcntl.h>
-#include <rak/path.h>
-#include <rak/algorithm.h>
 #include "utils/functional.h"
 
 #include "core/download.h"
@@ -58,6 +56,62 @@ namespace core {
 int log_messages_fd = -1;
 };
 
+inline std::string
+path_expand(const std::string& path) {
+  if (path.empty() || path[0] != '~')
+    return path;
+
+  char* home = std::getenv("HOME");
+
+  if (home == NULL)
+    return path;
+
+  return home + path.substr(1);
+}
+
+// Don't inline this...
+//
+// Same strlcpy as found in *bsd.
+size_t
+strlcpy(char *dest, const char *src, size_t size) {
+  size_t n = size;
+  const char* first = src;
+
+  if (n != 0) {
+    while (--n != 0)
+      if ((*dest++ = *src++) == '\0')
+        break;
+  }
+
+  if (n == 0) {
+    if (size != 0)
+      *dest = '\0';
+
+    while (*src++)
+      ;
+  }
+
+  return src - first - 1;
+}
+
+inline char*
+path_expand(const char* src, char* first, char* last) {
+  if (*src == '~') {
+    char* home = std::getenv("HOME");
+
+    if (home == NULL)
+      return first;
+
+    first += strlcpy(first, home, std::distance(first, last));
+
+    if (first > last)
+      return last;
+
+    src++;
+  }
+
+  return std::min(first + strlcpy(first, src, std::distance(first, last)), last);
+}
 
 // return the "main" tracker for this download item
 std::optional<torrent::tracker::Tracker> get_active_tracker(core::Download* download) {
@@ -295,13 +349,13 @@ torrent::Object cmd_log_messages(const torrent::Object::string_type& arg) {
     }
 
     if (!arg.empty()) {
-        core::log_messages_fd = open(rak::path_expand(arg).c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
+        core::log_messages_fd = open(path_expand(arg).c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644);
 
         if (core::log_messages_fd < 0) {
             throw torrent::input_error("Could not open message log file.");
         }
 
-        control->core()->push_log_std("Opened message log file '" + rak::path_expand(arg) + "'.");
+        control->core()->push_log_std("Opened message log file '" + path_expand(arg) + "'.");
     }
 
     return torrent::Object();

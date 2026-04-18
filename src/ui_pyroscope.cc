@@ -26,7 +26,7 @@ python -c 'print u"\u22c5 \u22c5\u22c5 \u201d \u2019 \u266f \u2622 \u260d \u2318
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <rak/algorithm.h>
+// #include <rak/algorithm.h>
 
 #include "core/view.h"
 #include "core/manager.h"
@@ -851,7 +851,7 @@ bool ui_pyroscope_download_list_redraw(Window* window, display::Canvas* canvas, 
     }
 
     // define iterator range
-    Range range = rak::advance_bidirectional(
+    Range range = advance_bidirectional(
             view->begin_visible(),
             view->focus() != view->end_visible() ? view->focus() : view->begin_visible(),
             view->end_visible(),
