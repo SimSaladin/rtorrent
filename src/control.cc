@@ -6,9 +6,11 @@
 #include <sys/stat.h>
 #include <torrent/net/http_stack.h>
 #include <torrent/runtime/network_manager.h>
+#include <torrent/runtime/runtime.h>
 #include <torrent/utils/directory_events.h>
 
 #include "core/dht_manager.h"
+#include "core/download_list.h"
 #include "core/http_queue.h"
 #include "core/manager.h"
 #include "core/view_manager.h"
@@ -27,6 +29,7 @@
 #include "rpc/object_storage.h"
 #include "session/session_manager.h"
 #include "ui/root.h"
+#include "utils/watch_ready_queue.h"
 
 Control::Control()
   : m_ui(new ui::Root()),
@@ -36,7 +39,8 @@ Control::Control()
     m_commandScheduler(new rpc::CommandScheduler()),
     m_objectStorage(new rpc::object_storage()),
     m_lua_engine(new rpc::LuaEngine()),
-    m_directory_events(new torrent::directory_events()) {
+    m_directory_events(new torrent::directory_events()),
+    m_watch_ready_queue(new utils::WatchReadyQueue()) {
 
   m_core         = std::make_unique<core::Manager>();
   m_view_manager = std::make_unique<core::ViewManager>();
@@ -44,7 +48,8 @@ Control::Control()
 
   m_inputStdin->slot_pressed(std::bind(&input::Manager::pressed, m_input.get(), std::placeholders::_1));
 
-  m_task_shutdown.slot() = std::bind(&Control::handle_shutdown, this);
+  m_task_shutdown.slot()                = [this] { handle_shutdown(); };
+  m_task_shutdown_clear_requests.slot() = [this] { handle_shutdown_clear_requests(); };
 
   m_commandScheduler->set_slot_error_message([this](const std::string& msg) { m_core->push_log_std(msg); });
 }
@@ -66,15 +71,12 @@ Control::initialize() {
   display::Window::slot_unschedule([this](display::Window* w) { m_display->unschedule(w); });
   display::Window::slot_adjust([this]() { m_display->adjust_layout(); });
 
-  torrent::net_thread::http_stack()->set_user_agent(USER_AGENT);
-
-  m_core->listen_open();
   m_core->set_hashing_view(*m_view_manager->find_throw("hashing"));
 
   m_ui->init(this);
 
   if(!display::Canvas::daemon())
-    m_inputStdin->insert(torrent::this_thread::poll());
+    m_inputStdin->insert();
 }
 
 void
@@ -82,9 +84,12 @@ Control::cleanup() {
   rpc::rpc.cleanup();
 
   torrent::this_thread::scheduler()->erase(&m_task_shutdown);
+  torrent::this_thread::scheduler()->erase(&m_task_shutdown_clear_requests);
 
   if(!display::Canvas::daemon())
-    m_inputStdin->remove(torrent::this_thread::poll());
+    m_inputStdin->remove();
+
+  m_directory_events->close();
 
   if (scgi_thread::thread()->is_active())
     scgi_thread::thread()->stop_thread_wait();
@@ -109,7 +114,7 @@ Control::cleanup_exception() {
 
 bool
 Control::is_shutdown_completed() {
-  if (!m_shutdownQuick)
+  if (!m_shutdown_quick)
     return false;
 
   // Tracker requests can be disowned, so wait for these to
@@ -121,18 +126,21 @@ Control::is_shutdown_completed() {
   if (torrent::net_thread::http_stack()->size() != 0 || !core()->http_queue()->empty())
     return false;
 
-  return torrent::is_inactive();
+  return core()->is_download_shutdown_completed();
 }
 
 void
 Control::handle_shutdown() {
+  m_watch_ready_queue->shutdown();
+
   rpc::commands.call_catch("event.system.shutdown", rpc::make_target(), "shutdown", "System shutdown event action failed: ");
 
   if (scgi_thread::thread()->is_active())
     scgi_thread::thread()->stop_thread_wait();
 
-  if (!m_shutdownQuick) {
+  if (!m_shutdown_quick) {
     torrent::runtime::network_manager()->listen_close();
+    torrent::runtime::shutdown();
 
     m_directory_events->close();
     m_core->shutdown(false);
@@ -141,10 +149,33 @@ Control::handle_shutdown() {
       torrent::this_thread::scheduler()->wait_for_ceil_seconds(&m_task_shutdown, 5s);
 
   } else {
+    torrent::runtime::quick_shutdown();
     m_core->shutdown(true);
   }
 
-  m_shutdownQuick = true;
-  m_shutdownReceived = false;
+  if (!m_shutdown_session_saved) {
+    // Transfers are stopped, so this is the final state; write it before the
+    // stopped announces can hold the shutdown. A shutdown hook may already
+    // have queued these resume builds.
+    m_core->download_list()->session_save();
+    session_thread::manager()->flush_shutdown_saves();
+    m_shutdown_session_saved = true;
+  }
+
+  if (!m_task_shutdown_clear_requests.is_scheduled())
+    torrent::this_thread::scheduler()->wait_for_ceil_seconds(&m_task_shutdown_clear_requests, 10s);
+
+  m_shutdown_quick    = true;
+  m_shutdown_received = false;
 }
 
+void
+Control::handle_shutdown_clear_requests() {
+  torrent::net_thread::http_stack()->clear_requests();
+
+  // Use 5s for the initial wait to ensure trackers get a chance to finish both IPv4 and IPv6 requests.
+  if (m_clear_requests_count++ == 0)
+    torrent::this_thread::scheduler()->wait_for(&m_task_shutdown_clear_requests, 5s);
+  else
+    torrent::this_thread::scheduler()->wait_for(&m_task_shutdown_clear_requests, 1s);
+}

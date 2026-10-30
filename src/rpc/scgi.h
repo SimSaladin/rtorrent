@@ -3,13 +3,14 @@
 
 #include <array>
 #include <memory>
-#include <torrent/event.h>
+#include <torrent/system/event.h>
+#include <torrent/system/scheduler.h>
 
 #include "rpc/scgi_task.h"
 
 namespace rpc {
 
-class SCgi : public torrent::Event {
+class SCgi : public torrent::system::Event {
 public:
   static const int max_tasks = 100;
 
@@ -39,12 +40,16 @@ private:
   using task_list = std::array<std::unique_ptr<SCgiTask>, max_tasks>;
 
   void                open(sockaddr* sa, unsigned int length);
+  void                pause_accept(int error);
+  void                resume_accept();
 
   std::string         m_path;
   int                 m_logFd{-1};
 
   task_list           m_tasks;
   task_list::iterator m_current;
+
+  torrent::system::SchedulerEntry m_resume_accept;
 };
 
 }

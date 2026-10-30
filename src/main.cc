@@ -11,6 +11,9 @@
 #include <torrent/exceptions.h>
 #include <torrent/data/chunk_utils.h>
 #include <torrent/net/fd.h>
+#include <torrent/net/http_stack.h>
+#include <torrent/runtime/memory_manager.h>
+#include <torrent/runtime/runtime.h>
 #include <torrent/utils/chrono.h>
 #include <torrent/utils/log.h>
 
@@ -20,7 +23,6 @@
 
 #include "core/dht_manager.h"
 #include "core/download.h"
-#include "core/download_factory.h"
 #include "core/manager.h"
 #include "display/canvas.h"
 #include "display/window.h"
@@ -30,15 +32,15 @@
 #include "rpc/command_scheduler_item.h"
 #include "rpc/parse_commands.h"
 #include "scgi/thread_scgi.h"
-#include "session/download_storer.h"
-#include "session/thread_session.h"
 #include "session/session_manager.h"
+#include "session/thread_session.h"
 #include "ui/root.h"
 #include "utils/directory.h"
 
 #include "control.h"
 #include "command_helpers.h"
 #include "globals.h"
+#include "setup.h"
 #include "signal_handler.h"
 #include "option_parser.h"
 
@@ -49,37 +51,6 @@ void handle_sigbus(int signum, siginfo_t* sa, void* ptr);
 void do_panic(int signum);
 void print_help();
 void initialize_commands();
-
-void do_nothing() {}
-void do_nothing_str(const std::string&) {}
-
-int
-parse_options(int argc, char** argv) {
-  try {
-    OptionParser optionParser;
-
-    // Converted.
-    optionParser.insert_flag('h', std::bind(&print_help));
-    optionParser.insert_flag('n', std::bind(&do_nothing_str, std::placeholders::_1));
-    optionParser.insert_flag('D', std::bind(&do_nothing_str, std::placeholders::_1));
-    optionParser.insert_flag('I', std::bind(&do_nothing_str, std::placeholders::_1));
-    optionParser.insert_flag('K', std::bind(&do_nothing_str, std::placeholders::_1));
-
-    optionParser.insert_option('b', std::bind(&rpc::call_command_set_string, "network.bind_address.set", std::placeholders::_1));
-    optionParser.insert_option('d', std::bind(&rpc::call_command_set_string, "directory.default.set", std::placeholders::_1));
-    optionParser.insert_option('i', std::bind(&rpc::call_command_set_string, "ip", std::placeholders::_1));
-    optionParser.insert_option('p', std::bind(&rpc::call_command_set_string, "network.port_range.set", std::placeholders::_1));
-    optionParser.insert_option('s', std::bind(&rpc::call_command_set_string, "session", std::placeholders::_1));
-
-    optionParser.insert_option('O',      std::bind(&rpc::parse_command_single_std, std::placeholders::_1));
-    optionParser.insert_option_list('o', std::bind(&rpc::call_command_set_std_string, std::placeholders::_1, std::placeholders::_2));
-
-    return optionParser.process(argc, argv);
-
-  } catch (torrent::input_error& e) {
-    throw torrent::input_error("Failed to parse command line option: " + std::string(e.what()));
-  }
-}
 
 void
 initialize_rpc_slots() {
@@ -108,43 +79,6 @@ initialize_rpc_slots() {
 
       return *itr;
     };
-}
-
-void
-load_session_torrents() {
-  utils::Directory entries = session::DownloadStorer::get_formated_entries(session_thread::manager()->path());
-
-  for (const auto& entry : entries) {
-    // We don't really support session torrents that are links. These
-    // would be overwritten anyway on exit, and thus not really be
-    // useful.
-    if (!entry.is_file())
-      continue;
-
-    core::DownloadFactory* f = new core::DownloadFactory(control->core());
-
-    // Replace with session torrent flag.
-    f->set_session(true);
-    f->set_init_load(true);
-    f->slot_finished([f](){ delete f; });
-    f->load(entries.path() + entry.s_name);
-    f->commit();
-  }
-}
-
-void
-load_arg_torrents(char** first, char** last) {
-  //std::for_each(begin, end, std::bind1st(std::mem_fun(&core::Manager::insert), &control->get_core()));
-  for (; first != last; ++first) {
-    core::DownloadFactory* f = new core::DownloadFactory(control->core());
-
-    // Replace with session torrent flag.
-    f->set_start(true);
-    f->set_init_load(true);
-    f->slot_finished([f](){ delete f; });
-    f->load(*first);
-    f->commit();
-  }
 }
 
 static void
@@ -176,46 +110,65 @@ main(int argc, char** argv) {
     srandom(random_seed);
     srand48(random_seed);
 
-    torrent::initialize_main_thread();
     torrent::log_initialize();
 
-    control = new Control;
+    // TODO: Create a fake thread object for initializing other processes and enabling logging.
+    torrent::initialize_main_thread();
 
-    SignalHandler::set_ignore(SIGPIPE);
-    SignalHandler::set_handler(SIGINT,   std::bind(&Control::receive_normal_shutdown, control));
-    SignalHandler::set_handler(SIGHUP,   std::bind(&Control::receive_normal_shutdown, control));
-    SignalHandler::set_handler(SIGTERM,  std::bind(&Control::receive_quick_shutdown, control));
-    SignalHandler::set_handler(SIGWINCH, std::bind(&display::Manager::force_redraw, control->display()));
+    // Block SIGCHLD until all threads are created, then unblock on main-thread, to avoid SIGCHLD
+    // interrupting other threads.
+    //
+    // This means only main-thread can fork and wait for child processes.
+
+    SignalHandler::set_block(SIGALRM);
+    SignalHandler::set_block(SIGPIPE);
+    SignalHandler::set_block(SIGCHLD);
+
+    // All signal handlers must restore errno if they return.
     SignalHandler::set_handler(SIGSEGV,  std::bind(&do_panic, SIGSEGV));
     SignalHandler::set_handler(SIGILL,   std::bind(&do_panic, SIGILL));
     SignalHandler::set_handler(SIGFPE,   std::bind(&do_panic, SIGFPE));
 
+    // Limited list of commands with the following format:
+    //
+    // cat ~/.rtorrent.rc:
+    //
+    // # do:log.open_file=system,/usr/rakshasa/system.log
+    // # do:log.add_output=system,system
+    //
+    parse_config_file(argc, argv, [](auto& path) {
+        if (path.empty())
+          return;
+
+        parse_config_file_comments(path);
+      });
+
+    control = new Control;
+
+    SignalHandler::set_handler(SIGINT,   std::bind(&Control::receive_normal_shutdown, control));
+    SignalHandler::set_handler(SIGHUP,   std::bind(&Control::receive_normal_shutdown, control));
+    SignalHandler::set_handler(SIGTERM,  std::bind(&Control::receive_quick_shutdown, control));
+    SignalHandler::set_handler(SIGWINCH, std::bind(&display::Manager::force_redraw, control->display()));
+
     SignalHandler::set_sigaction_handler(SIGBUS, &handle_sigbus);
 
-    // SIGUSR1 is used for interrupting polling, forcing the target
-    // thread to process new non-socket events.
-    //
-    // LibTorrent uses sockets for this purpose on Solaris and other
-    // platforms that do not properly pass signals to the target
-    // threads. Use '--enable-interrupt-socket' when configuring
-    // LibTorrent to enable this workaround.
-    if (torrent::utils::Thread::should_handle_sigusr1())
-      SignalHandler::set_handler(SIGUSR1, std::bind(&do_nothing));
+    torrent::log_add_group_output(torrent::LOG_ERRORS,         "important");
+    torrent::log_add_group_output(torrent::LOG_DHT_ERROR,      "important");
 
-    torrent::log_add_group_output(torrent::LOG_NOTICE,    "important");
-    torrent::log_add_group_output(torrent::LOG_DHT_ERROR, "important");
-
-    torrent::log_add_group_output(torrent::LOG_INFO,           "complete");
+    torrent::log_add_group_output(torrent::LOG_ERRORS,         "complete");
+    torrent::log_add_group_output(torrent::LOG_EVENTS,         "complete");
     torrent::log_add_group_output(torrent::LOG_DHT_ERROR,      "complete");
     torrent::log_add_group_output(torrent::LOG_DHT_CONTROLLER, "complete");
 
     initialize_rpc_slots();
 
     torrent::initialize();
-    torrent::set_main_thread_slots(std::bind(&client_perform));
+    torrent::main_thread::set_client_callback(&client_perform);
 
     scgi::ThreadScgi::create_thread();
     session::ThreadSession::create_thread();
+
+    SignalHandler::set_unblock(SIGCHLD);
 
     // Initialize option handlers after libtorrent to ensure
     // torrent::ConnectionManager* are valid etc.
@@ -223,17 +176,17 @@ main(int argc, char** argv) {
 
     if (OptionParser::has_flag('D', argc, argv)) {
       rpc::call_command_set_value("method.use_deprecated.set", true);
-      lt_log_print(torrent::LOG_WARN, "Enabled deprecated commands.");
+      lt_log_print(torrent::LOG_ERRORS, "Enabled deprecated commands.");
     }
 
     if (OptionParser::has_flag('I', argc, argv)) {
       rpc::call_command_set_value("method.use_intermediate.set", 0);
-      lt_log_print(torrent::LOG_WARN, "Disabled intermediate commands.");
+      lt_log_print(torrent::LOG_ERRORS, "Disabled intermediate commands.");
     }
 
     if (OptionParser::has_flag('K', argc, argv)) {
       rpc::call_command_set_value("method.use_intermediate.set", 2);
-      lt_log_print(torrent::LOG_WARN, "Allowing intermediate commands without xmlrpc.");
+      lt_log_print(torrent::LOG_ERRORS, "Allowing intermediate commands without xmlrpc.");
     }
 
     rpc::parse_command_multiple
@@ -261,7 +214,14 @@ main(int argc, char** argv) {
        "method.insert = event.download.hash_queued,multi|rlookup|static\n"
 
        "method.set_key = event.download.inserted,         1_send_scrape, ((d.tracker.send_scrape,30))\n"
-       "method.set_key = event.download.inserted_new,     1_prepare, {(branch,((d.state)),((view.set_visible,started)),((view.set_visible,stopped)) ),(d.save_full_session)}\n"
+       "method.set_key = event.download.inserted_new,     1_prepare,   {(branch,((d.state)),((view.set_visible,started)),((view.set_visible,stopped)) )}\n"
+       // d.save_full_session runs LAST (~ prefix is ASCII 0x7E, sorts after all alphanumerics,
+       // matching the existing ~_delete_tied precedent on event.download.erased) so the on-disk
+       // snapshot includes custom fields written by other inserted_new handlers (addtime,
+       // seedingtime, etc.). Was previously inside 1_prepare alongside view setup, which
+       // snapshotted bencode before later handlers ran, so d.set_custom=addtime did not reach
+       // .rtorrent until the next periodic resume save — a window where rtorrent restart lost them.
+       "method.set_key = event.download.inserted_new,     ~_save_full, ((d.save_full_session))\n"
        "method.set_key = event.download.inserted_session, 1_prepare, {(branch,((d.state)),((view.set_visible,started)),((view.set_visible,stopped)) )}\n"
 
        "method.set_key = event.download.inserted, 1_prioritize_toc, \"branch=file.prioritize_toc=,{\\\"f.multicall=(file.prioritize_toc.first),f.prioritize_first.enable=\\\",\\\"f.multicall=(file.prioritize_toc.last),f.prioritize_last.enable=\\\",d.update_priorities=}\"\n"
@@ -335,14 +295,12 @@ main(int argc, char** argv) {
        "view.filter = leeching,((and,((d.state)),((not,((d.complete))))))\n"
        "view.filter_on = leeching,event.download.resumed,event.download.paused,event.download.finished\n"
 
-       "schedule2 = view.main,10,10,((view.sort,main,20))\n"
-       "schedule2 = view.name,10,10,((view.sort,name,20))\n"
+       "schedule = view.main,10,10,((view.sort,main,20))\n"
+       "schedule = view.name,10,10,((view.sort,name,20))\n"
 
-       "schedule2 = session_save,1200,1200,((session.save))\n"
-       "schedule2 = low_diskspace,5,60,((close_low_diskspace,500M))\n"
-       "schedule2 = prune_file_status,3600,86400,((system.file_status_cache.prune))\n"
-
-       "protocol.encryption.set=allow_incoming,prefer_plaintext,enable_retry\n"
+       "schedule = session_save,1200,1200,((session.save))\n"
+       "schedule = low_diskspace,5,60,((close_low_diskspace,500M))\n"
+       "schedule = prune_file_status,3600,86400,((system.file_status_cache.prune))\n"
 
        "ui.color.focus.set=reverse\n"
     );
@@ -350,108 +308,143 @@ main(int argc, char** argv) {
     // Functions that might not get depracted as they are nice for
     // configuration files, and thus might do with just some
     // cleanup.
-    CMD2_REDIRECT("upload_rate",           "throttle.global_up.max_rate.set_kb");
-    CMD2_REDIRECT("download_rate",         "throttle.global_down.max_rate.set_kb");
+    CMD_REDIRECT("upload_rate",           "throttle.global_up.max_rate.set_kb");
+    CMD_REDIRECT("download_rate",         "throttle.global_down.max_rate.set_kb");
 
-    CMD2_REDIRECT("ratio.enable",          "group.seeding.ratio.enable");
-    CMD2_REDIRECT("ratio.disable",         "group.seeding.ratio.disable");
-    CMD2_REDIRECT("ratio.min",             "group.seeding.ratio.min");
-    CMD2_REDIRECT("ratio.max",             "group.seeding.ratio.max");
-    CMD2_REDIRECT("ratio.upload",          "group.seeding.ratio.upload");
-    CMD2_REDIRECT("ratio.min.set",         "group.seeding.ratio.min.set");
-    CMD2_REDIRECT("ratio.max.set",         "group.seeding.ratio.max.set");
-    CMD2_REDIRECT("ratio.upload.set",      "group.seeding.ratio.upload.set");
+    CMD_REDIRECT("ratio.enable",          "group.seeding.ratio.enable");
+    CMD_REDIRECT("ratio.disable",         "group.seeding.ratio.disable");
+    CMD_REDIRECT("ratio.min",             "group.seeding.ratio.min");
+    CMD_REDIRECT("ratio.max",             "group.seeding.ratio.max");
+    CMD_REDIRECT("ratio.upload",          "group.seeding.ratio.upload");
+    CMD_REDIRECT("ratio.min.set",         "group.seeding.ratio.min.set");
+    CMD_REDIRECT("ratio.max.set",         "group.seeding.ratio.max.set");
+    CMD_REDIRECT("ratio.upload.set",      "group.seeding.ratio.upload.set");
 
-    CMD2_REDIRECT("encryption",            "protocol.encryption.set");
-    CMD2_REDIRECT("encoding_list",         "encoding.add");
+    CMD_REDIRECT("encryption",            "protocol.encryption.set");
 
-    CMD2_REDIRECT("connection_leech",      "protocol.connection.leech.set");
-    CMD2_REDIRECT("connection_seed",       "protocol.connection.seed.set");
+    CMD_REDIRECT("check_hash",            "pieces.hash.on_completion.set");
 
-    CMD2_REDIRECT("min_peers",             "throttle.min_peers.normal.set");
-    CMD2_REDIRECT("max_peers",             "throttle.max_peers.normal.set");
-    CMD2_REDIRECT("min_peers_seed",        "throttle.min_peers.seed.set");
-    CMD2_REDIRECT("max_peers_seed",        "throttle.max_peers.seed.set");
+    CMD_REDIRECT("connection_leech",      "protocol.connection.leech.set");
+    CMD_REDIRECT("connection_seed",       "protocol.connection.seed.set");
 
-    CMD2_REDIRECT("min_uploads",           "throttle.min_uploads.set");
-    CMD2_REDIRECT("max_uploads",           "throttle.max_uploads.set");
-    CMD2_REDIRECT("min_downloads",         "throttle.min_downloads.set");
-    CMD2_REDIRECT("max_downloads",         "throttle.max_downloads.set");
+    CMD_REDIRECT("min_peers",             "throttle.min_peers.normal.set");
+    CMD_REDIRECT("max_peers",             "throttle.max_peers.normal.set");
+    CMD_REDIRECT("min_peers_seed",        "throttle.min_peers.seed.set");
+    CMD_REDIRECT("max_peers_seed",        "throttle.max_peers.seed.set");
 
-    CMD2_REDIRECT("max_uploads_div",       "throttle.max_uploads.div.set");
-    CMD2_REDIRECT("max_uploads_global",    "throttle.max_uploads.global.set");
-    CMD2_REDIRECT("max_downloads_div",     "throttle.max_downloads.div.set");
-    CMD2_REDIRECT("max_downloads_global",  "throttle.max_downloads.global.set");
+    CMD_REDIRECT("min_uploads",           "throttle.min_uploads.set");
+    CMD_REDIRECT("max_uploads",           "throttle.max_uploads.set");
+    CMD_REDIRECT("min_downloads",         "throttle.min_downloads.set");
+    CMD_REDIRECT("max_downloads",         "throttle.max_downloads.set");
 
-    CMD2_REDIRECT("max_memory_usage",      "pieces.memory.max.set");
+    CMD_REDIRECT("max_uploads_div",       "throttle.max_uploads.div.set");
+    CMD_REDIRECT("max_uploads_global",    "throttle.max_uploads.global.set");
+    CMD_REDIRECT("max_downloads_div",     "throttle.max_downloads.div.set");
+    CMD_REDIRECT("max_downloads_global",  "throttle.max_downloads.global.set");
 
-    CMD2_REDIRECT("bind",                  "network.bind_address.set");
-    CMD2_REDIRECT("ip",                    "network.local_address.set");
-    CMD2_REDIRECT("port_range",            "network.port_range.set");
+    CMD_REDIRECT("directory",             "directory.default.set");
+    CMD_REDIRECT("session",               "session.path.set");
 
-    CMD2_REDIRECT("dht",                   "dht.mode.set");
+    CMD_REDIRECT_NO_EXPORT("port_range",  "network.listen.port.range.set");
+    CMD_REDIRECT_NO_EXPORT("scgi_port",   "network.scgi.open_port");
+    CMD_REDIRECT_NO_EXPORT("scgi_local",  "network.scgi.open_local");
 
-    CMD2_REDIRECT("port_random",           "network.port_random.set");
-    CMD2_REDIRECT("proxy_address",         "network.proxy_address.set");
+    CMD_REDIRECT("to_gm_time",            "convert.gm_time");
+    CMD_REDIRECT("to_gm_date",            "convert.gm_date");
+    CMD_REDIRECT("to_time",               "convert.time");
+    CMD_REDIRECT("to_date",               "convert.date");
+    CMD_REDIRECT("to_elapsed_time",       "convert.elapsed_time");
+    CMD_REDIRECT("to_kb",                 "convert.kb");
+    CMD_REDIRECT("to_mb",                 "convert.mb");
+    CMD_REDIRECT("to_xb",                 "convert.xb");
+    CMD_REDIRECT("to_throttle",           "convert.throttle");
 
-    CMD2_REDIRECT("scgi_port",             "network.scgi.open_port");
-    CMD2_REDIRECT("scgi_local",            "network.scgi.open_local");
+    // TODO: Deprecate these at some point a while after 1.1 release.
 
-    CMD2_REDIRECT("directory",             "directory.default.set");
-    CMD2_REDIRECT("session",               "session.path.set");
+    CMD_REDIRECT("d.multicall2",                   "d.multicall");
+    CMD_REDIRECT("network.open_sockets",           "system.sockets.size");
+    CMD_REDIRECT("network.max_open_sockets",       "system.sockets.max_size");
+    CMD_REDIRECT("network.max_open_sockets.set",   "system.sockets.max_size.set");
+    CMD_REDIRECT("network.http.proxy_address",     "network.proxy.http");
+    CMD_REDIRECT("network.http.proxy_address.set", "network.proxy.http.set");
 
-    CMD2_REDIRECT("check_hash",            "pieces.hash.on_completion.set");
+    rpc::rpc.mark_safe("d.multicall2");
+    rpc::rpc.mark_safe("network.max_open_sockets");
+    rpc::rpc.mark_safe("network.http.proxy_address");
 
-    CMD2_REDIRECT("key_layout",            "keys.layout.set");
+    CMD2_ANY_VALUE_V("network.http.max_total_connections.set", [](auto, auto) {
+        lt_log_print(torrent::LOG_ERRORS, "network.http.max_total_connections.set is deprecated, use system.sockets.http.min_alloc.set instead.");
+      });
 
-    CMD2_REDIRECT("to_gm_time",            "convert.gm_time");
-    CMD2_REDIRECT("to_gm_date",            "convert.gm_date");
-    CMD2_REDIRECT("to_time",               "convert.time");
-    CMD2_REDIRECT("to_date",               "convert.date");
-    CMD2_REDIRECT("to_elapsed_time",       "convert.elapsed_time");
-    CMD2_REDIRECT("to_kb",                 "convert.kb");
-    CMD2_REDIRECT("to_mb",                 "convert.mb");
-    CMD2_REDIRECT("to_xb",                 "convert.xb");
-    CMD2_REDIRECT("to_throttle",           "convert.throttle");
+    CMD2_ANY_VALUE_V("network.max_open_files.set", [](auto, auto) {
+        lt_log_print(torrent::LOG_ERRORS, "network.max_open_files.set is deprecated, use system.sockets.files.min_alloc.set instead.");
+      });
 
-    CMD2_REDIRECT("torrent_list_layout",   "ui.torrent_list.layout.set");
+    // TODO: Keep d.directory_base for a while as it is widely used.
+    CMD_REDIRECT("d.directory_base",     "d.directory");
+    CMD_REDIRECT("d.directory_base.set", "d.directory.base.set");
 
-    // Deprecate:
-
-    CMD2_VAR_STRING("dht.throttle.name",   "deprecated");
-    rpc::rpc.mark_safe("dht.throttle.name");
-
-    CMD2_REDIRECT("network.http.max_open",     "network.http.max_total_connections");
-    CMD2_REDIRECT("network.http.max_open.set", "network.http.max_total_connections.set");
-
-    // Deprecated commands. Don't use these anymore.
-    //
-    // It has been so long that we now re-create these commands with the new (old by now) command
-    // call style, where the first argument is the target.
+    rpc::rpc.mark_safe("d.directory_base");
 
     // if (rpc::call_command_value("method.use_intermediate") == 1) {
-    //   CMD2_REDIRECT("execute", "execute2");
-
-    //   CMD2_REDIRECT("schedule", "schedule2");
-    //   CMD2_REDIRECT("schedule_remove", "schedule_remove2");
 
     // } else if (rpc::call_command_value("method.use_intermediate") == 2) {
     //   Allow for use in config files, etc, just don't export it.
-    //   CMD2_REDIRECT_NO_EXPORT("execute", "execute2");
-
-    //   CMD2_REDIRECT_NO_EXPORT("schedule", "schedule2");
-    //   CMD2_REDIRECT_NO_EXPORT("schedule_remove", "schedule_remove2");
     // }
 
-    // if (rpc::call_command_value("method.use_deprecated") == 1) {
-    // }
+    if (rpc::call_command_value("method.use_deprecated") == 1) {
+      CMD_REDIRECT("execute2",         "execute");
+      CMD_REDIRECT("schedule2",        "schedule");
+      CMD_REDIRECT("schedule_remove2", "schedule.remove");
+
+      CMD_REDIRECT("bind",                  "network.bind_address.set");
+      CMD_REDIRECT("ip",                    "network.local_address.set");
+
+      // TODO: Check if dht is on by default.
+      CMD_REDIRECT("dht",                   "dht.mode.set");
+
+      CMD_REDIRECT("port_random",           "network.listen.port.random.set");
+      CMD_REDIRECT("proxy_address",         "network.proxy.http.set");
+
+      CMD_REDIRECT("key_layout",            "keys.layout.set");
+
+      CMD_REDIRECT("torrent_list_layout",   "ui.torrent_list.layout.set");
+
+      CMD2_VAR_STRING("dht.throttle.name",   "deprecated");
+      rpc::rpc.mark_safe("dht.throttle.name");
+
+      CMD_REDIRECT("network.http.max_open",     "network.http.max_total_connections");
+      CMD_REDIRECT("network.http.max_open.set", "network.http.max_total_connections.set");
+
+      // Users should check their setups to see if they need to modify their use of these options.
+      CMD_REDIRECT("max_memory_usage",      "pieces.memory.max.set");
+
+      CMD_ANY_LIST("throttle.ip", []( auto, auto) {
+          lt_log_print(torrent::LOG_ERRORS, "The 'throttle.ip' command is deprecated and does nothing.");
+          return torrent::Object();
+        });
+
+      CMD_ANY("network.port_open", [](auto, auto) {
+          lt_log_print(torrent::LOG_ERRORS, "The 'network.port_open' command is deprecated and does nothing.");
+          return torrent::Object();
+        });
+      CMD_ANY("network.port_open.set", [](auto, auto) {
+          lt_log_print(torrent::LOG_ERRORS, "The 'network.port_open.set' command is deprecated and does nothing.");
+          return torrent::Object();
+        });
+
+      CMD_REDIRECT("network.port_random",     "network.listen.port.random");
+      CMD_REDIRECT("network.port_random.set", "network.listen.port.random.set");
+      CMD_REDIRECT("network.port_range",      "network.listen.port.range");
+      CMD_REDIRECT("network.port_range.set",  "network.listen.port.range.set");
+    }
 
     {
       auto fd = torrent::fd_open_family(torrent::fd_flag_stream, AF_INET6);
 
       if (fd == -1) {
         if (errno == EAFNOSUPPORT) {
-          lt_log_print(torrent::LOG_WARN, "disabling ipv6 support, not available on system");
+          lt_log_print(torrent::LOG_ERRORS, "disabling ipv6 support, not available on system");
           rpc::call_command_set_value("network.block.ipv6.set", true);
         }
       } else {
@@ -459,71 +452,71 @@ main(int argc, char** argv) {
       }
     }
 
-    int firstArg = parse_options(argc, argv);
+    int firstArg = parse_main_options(argc, argv);
 
-    if (OptionParser::has_flag('n', argc, argv)) {
-      lt_log_print(torrent::LOG_WARN, "Ignoring rtorrent.rc.");
-    } else {
-      char* config_dir = std::getenv("XDG_CONFIG_HOME");
-      char* home_dir = std::getenv("HOME");
+    parse_config_file(argc, argv, [](auto& path) {
+        if (path.empty()) {
+          lt_log_print(torrent::LOG_ERRORS, "Ignoring rtorrent.rc.");
+          return;
+        }
 
-      if (config_dir != NULL && config_dir[0] == '/' &&
-          access((std::string(config_dir) + "/rtorrent/rtorrent.rc").c_str(), F_OK) != -1) {
-        rpc::parse_command_single(rpc::make_target(), "try_import = " + std::string(config_dir) + "/rtorrent/rtorrent.rc");
-      } else if (home_dir != NULL && access((std::string(home_dir) + "/.config/rtorrent/rtorrent.rc").c_str(), F_OK) != -1) {
-        rpc::parse_command_single(rpc::make_target(), "try_import = ~/.config/rtorrent/rtorrent.rc");
-      } else {
-        rpc::parse_command_single(rpc::make_target(), "try_import = ~/.rtorrent.rc");
-      }
-    }
+        rpc::parse_command_single(rpc::make_target(), "try_import=" + path);
+      });
 
     LT_LOG("seeded srandom and srand48 (seed:%u)", random_seed);
+    LT_LOG("max memory usage: %" PRIu64, torrent::runtime::memory_manager()->max_memory_usage());
 
     control->initialize();
     control->ui()->load_input_history();
 
-    // Load session torrents and perform scheduled tasks to ensure
-    // session torrents are loaded before arg torrents.
+    torrent::net_thread::http_stack()->set_user_agent(USER_AGENT);
+    torrent::runtime::initialize_network();
+
+    // Load session torrents and perform scheduled tasks to ensure session torrents are loaded
+    // before arg torrents.
+    control->dht_manager()->set_auto_if_untouched_and_has_session();
     control->dht_manager()->load_dht_cache();
-    load_session_torrents();
 
-    // TODO: Check if this is required.
-    // rak::priority_queue_perform(&taskScheduler, cachedTime);
-
+    load_session_torrents(session_thread::manager()->path());
     load_arg_torrents(argv + firstArg, argv + argc);
 
-    // Make sure we update the display before any scheduled tasks can
-    // run, so that loading of torrents doesn't look like it hangs on
-    // startup.
+    // Make sure we update the display before any scheduled tasks can run, so that loading of
+    // torrents doesn't look like it hangs on startup.
     control->display()->adjust_layout();
     control->display()->receive_update();
 
     rpc::commands.call_catch("event.system.startup_done", rpc::make_target(), "startup_done", "System startup_done event action failed: ");
 
-    torrent::utils::Thread::self()->event_loop();
+    torrent::system::Thread::self()->event_loop();
 
-    control->core()->download_list()->session_save();
+    // A quick shutdown with no tracker request pending leaves the loop before
+    // handle_shutdown() could save.
+    if (!control->is_shutdown_session_saved())
+      control->core()->download_list()->session_save();
+
     control->cleanup();
 
   } catch (torrent::internal_error& e) {
-    control->cleanup_exception();
+    if (control != nullptr)
+      control->cleanup_exception();
 
     std::cout << "rtorrent: caught torrent::internal_error: "
               << e.what() << std::endl
               << e.backtrace();
 
-    lt_log_print_dump(torrent::LOG_CRITICAL, e.backtrace().c_str(), e.backtrace().size(),
+    lt_log_print_dump(torrent::LOG_ERRORS, e.backtrace().c_str(), e.backtrace().size(),
                       "Caught internal_error: '%s'.", e.what());
 
     torrent::log_cleanup();
     return -1;
 
   } catch (std::exception& e) {
-    control->cleanup_exception();
+    if (control != nullptr)
+      control->cleanup_exception();
 
     std::cout << "rtorrent: caught" << typeid(e).name() << " : " << e.what() << std::endl;
 
-    lt_log_print(torrent::LOG_CRITICAL, "Caught exception: '%s'.", e.what());
+    lt_log_print(torrent::LOG_ERRORS, "Caught exception: '%s'.", e.what());
 
     torrent::log_cleanup();
     return -1;
@@ -564,8 +557,6 @@ handle_sigbus(int signum, siginfo_t* sa, [[maybe_unused]] void* ptr) {
 #else
   output << "Stack dump not enabled." << std::endl;
 #endif
-  output << std::endl << "Error: " << std::strerror(sa->si_errno) << std::endl;
-
   const char* signal_reason;
 
   switch (sa->si_code) {
@@ -602,9 +593,9 @@ handle_sigbus(int signum, siginfo_t* sa, [[maybe_unused]] void* ptr) {
 handle_sigbus_exit:
   std::cout << output.rdbuf();
 
-  if (lt_log_is_valid(torrent::LOG_CRITICAL)) {
+  if (lt_log_is_valid(torrent::LOG_ERRORS)) {
     std::string dump = output.str();
-    lt_log_print_dump(torrent::LOG_CRITICAL, dump.c_str(), dump.size(), "Caught signal: '%s'.", signal_reason);
+    lt_log_print_dump(torrent::LOG_ERRORS, dump.c_str(), dump.size(), "Caught signal: '%s'.", signal_reason);
   }
 
   torrent::log_cleanup();
@@ -616,7 +607,9 @@ do_panic(int signum) {
   // Use the default signal handler in the future to avoid infinit
   // loops.
   SignalHandler::set_default(signum);
-  display::Canvas::cleanup();
+
+  if (control != nullptr)
+    display::Canvas::cleanup();
 
   std::stringstream output;
 
@@ -641,9 +634,9 @@ do_panic(int signum) {
 
   std::cout << output.rdbuf();
 
-  if (lt_log_is_valid(torrent::LOG_CRITICAL)) {
+  if (lt_log_is_valid(torrent::LOG_ERRORS)) {
     std::string dump = output.str();
-    lt_log_print_dump(torrent::LOG_CRITICAL, dump.c_str(), dump.size(), "Caught signal: '%s.", strsignal(signum));
+    lt_log_print_dump(torrent::LOG_ERRORS, dump.c_str(), dump.size(), "Caught signal: '%s.", strsignal(signum));
   }
 
   torrent::log_cleanup();

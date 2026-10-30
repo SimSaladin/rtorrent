@@ -131,7 +131,7 @@ ipv4_range_parse(const char* address, uint32_t* address_start, uint32_t* address
   // copy everything up to '#'  to address_copy and work from there
   while(address[address_start_index] != '#' && address[address_start_index] != '\r' &&
         address[address_start_index] != '\n' && address[address_start_index] != '\0' &&
-        address_start_index < 4096 ) {
+        address_start_index < 4095 ) {
 
     address_copy[address_start_index] = address[address_start_index];
     address_start_index++;
@@ -206,6 +206,9 @@ ipv4_range_parse(const char* address, uint32_t* address_start, uint32_t* address
         if (mask_bits == 0) {
           mask = 0;
           end_mask = ~(uint32_t)0;
+        } else if (mask_bits == 32) {
+          mask = ~(uint32_t)0;
+          end_mask = 0;
         } else {
           mask = (~mask) << (32-mask_bits);
           end_mask = (~end_mask) >> mask_bits;
@@ -316,6 +319,11 @@ apply_ipv4_filter_load(const torrent::Object::list_type& args) {
       ipv4_filter_parse(buffer, value);
     }
 
+    if (file.fail() && !file.eof()) {
+      lineNumber++;
+      throw torrent::input_error("Exceeded max line length.");
+    }
+
   } catch (torrent::input_error& e) {
     snprintf(buffer, 2048, "Error in ip filter file: %s:%u: %s", filename.c_str(), lineNumber, e.what());
 
@@ -336,8 +344,8 @@ apply_ipv4_filter_dump() {
   torrent::Object raw_result = torrent::Object::create_list();
   torrent::Object::list_type& result = raw_result.as_list();
 
-  torrent::ipv4_table::range_map_type range_map = torrent::PeerList::ipv4_filter()->range_map;
-  torrent::ipv4_table::range_map_type::iterator iter = range_map.begin();
+  const torrent::ipv4_table::range_map_type& range_map = torrent::PeerList::ipv4_filter()->range_map;
+  torrent::ipv4_table::range_map_type::const_iterator iter = range_map.begin();
 
   while(iter != range_map.end()) {
     char buffer[64];
@@ -353,7 +361,7 @@ apply_ipv4_filter_dump() {
     inet_ntop(AF_INET, &net_start, start_str, INET_ADDRSTRLEN);
     inet_ntop(AF_INET, &net_end, end_str, INET_ADDRSTRLEN);
 
-    snprintf(buffer, 64, "%s-%s %s", start_str, end_str, torrent::option_as_string(torrent::OPTION_IP_FILTER, value));
+    snprintf(buffer, 64, "%s-%s %s", start_str, end_str, torrent::option_to_c_str_or_throw(torrent::OPTION_IP_FILTER, value));
 
     result.push_back((std::string)buffer);
 

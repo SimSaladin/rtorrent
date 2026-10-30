@@ -2,22 +2,20 @@
 #define RTORRENT_INPUT_INPUT_EVENT_H
 
 #include <functional>
-
-#include <torrent/event.h>
-#include <torrent/net/poll.h>
+#include <torrent/system/event.h>
 
 namespace input {
 
-class InputEvent : public torrent::Event {
+class InputEvent : public torrent::system::Event {
 public:
   typedef std::function<void (int)> slot_int;
 
-  InputEvent(int fd) { m_fileDesc = fd; }
+  InputEvent(int fd) { set_file_descriptor(fd); }
 
   const char*         type_name() const override { return "input"; }
 
-  void                insert(torrent::net::Poll* p);
-  void                remove(torrent::net::Poll* p);
+  void                insert();
+  void                remove();
 
   void                event_read() override;
   void                event_write() override;

@@ -20,6 +20,8 @@ void initialize_command_groups();
 void initialize_command_throttle();
 void initialize_command_tracker();
 void initialize_command_scheduler();
+void initialize_command_string();
+void initialize_command_system();
 void initialize_command_ui();
 void initialize_command_ui_pyroscope();
 
@@ -41,4 +43,6 @@ initialize_commands() {
   initialize_command_throttle();
   initialize_command_tracker();
   initialize_command_scheduler();
+  initialize_command_string();
+  initialize_command_system();
 }

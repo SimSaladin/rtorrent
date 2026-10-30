@@ -46,18 +46,30 @@
 #session.path.set = ./session
 
 # Watch a directory for new torrents, and stop those that have been
-# deleted.
+# deleted. Use directory.watch.ready for network shares or other watch
+# directories where files may be copied or written directly into place.
+# Do not mix directory.watch.ready and directory.watch.added on the same
+# watch directory.
 #
-#schedule2 = watch_directory,5,5,load.start=./watch/*.torrent
+#directory.watch.ready = ./watch, load.start
+#schedule = watch_directory,5,5,load.start=./watch/*.torrent
 
 # Close torrents when disk-space is low.
 #
-#schedule2 = low_diskspace,5,60,close_low_diskspace=100M
+#schedule = low_diskspace,5,60,close_low_diskspace=100M
 
 # The IP address reported to the tracker.
 #
 #network.local_address.set = 127.0.0.1
 #network.local_address.set = rakshasa.no
+
+# The port reported to the tracker, separate for ipv4/ipv6. A value of 0
+# (the default) falls back to reporting the listening port. network.local_port.set
+# sets both the ipv4 and ipv6 ports at once.
+#
+#network.local_port.set = 6881
+#network.local_port.ipv4.set = 6881
+#network.local_port.ipv6.set = 6882
 
 # The IP address the listening socket and outgoing connections is
 # bound to.
@@ -67,11 +79,11 @@
 
 # Port range to use for listening.
 #
-#network.port_range.set = 6890-6999
+#network.listen.port.range.set = 6890-6999
 
 # Start opening ports at a random position within the port range.
 #
-#network.port_random.set = no
+#network.listen.port.random.set = no
 
 # Set RPC type
 #network.rpc.use_xmlrpc.set = true
@@ -88,8 +100,8 @@
 
 # Alternative calls to bind and IP that should handle dynamic IP's.
 #
-#schedule2 = ip_tick,0,1800,ip=rakshasa
-#schedule2 = bind_tick,0,1800,bind=rakshasa
+#schedule = ip_tick,0,1800,ip=rakshasa
+#schedule = bind_tick,0,1800,bind=rakshasa
 
 # Encryption options, set to none (default) or any combination of the following:
 # allow_incoming, try_outgoing, require, require_RC4, enable_retry, prefer_plaintext
@@ -133,4 +145,4 @@
 #
 #network.scgi.open_port = "127.0.0.1:5000"
 #network.scgi.open_local = (cat,(session.path),/rpc.sock)
-#schedule2 = socket_chmod, 0, 0, "execute.nothrow=chmod,770,(cat,(session.path),/rpc.sock)"
+#schedule = socket_chmod, 0, 0, "execute.nothrow=chmod,770,(cat,(session.path),/rpc.sock)"

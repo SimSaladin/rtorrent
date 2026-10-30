@@ -15,10 +15,11 @@
 
 #include <functional>
 #include <list>
+#include <memory>
 #include <string>
 #include <vector>
 #include <torrent/object.h>
-#include <torrent/utils/scheduler.h>
+#include <torrent/system/scheduler.h>
 
 #include "globals.h"
 
@@ -26,9 +27,9 @@ namespace core {
 
 class Download;
 
-class View : private std::vector<Download*> {
+class View : private std::vector<std::shared_ptr<Download>> {
 public:
-  typedef std::vector<Download*> base_type;
+  typedef std::vector<std::shared_ptr<Download>> base_type;
   typedef std::function<void()>  slot_void;
   typedef std::list<slot_void>   signal_void;
 
@@ -72,8 +73,12 @@ public:
     emit_changed();
   }
 
-  void insert(Download* download) { base_type::push_back(download); }
+  void insert(const std::shared_ptr<Download>& download) { base_type::push_back(download); }
   void erase(Download* download);
+
+  // Throws while a filter or sort command runs, as changing views or downloads
+  // then would invalidate the iterators of the running algorithm.
+  static void check_unlocked();
 
   void set_visible(Download* download);
   void set_not_visible(Download* download);
@@ -86,8 +91,8 @@ public:
 
   void sort();
 
-  void set_sort_new(const torrent::Object& s) { m_sortNew = s; }
-  void set_sort_current(const torrent::Object& s) { m_sortCurrent = s; }
+  void set_sort_new(const torrent::Object& s) { check_unlocked(); m_sortNew = s; }
+  void set_sort_current(const torrent::Object& s) { check_unlocked(); m_sortCurrent = s; }
 
   // Need to explicity trigger filtering.
   void                   filter();
@@ -95,9 +100,9 @@ public:
   void                   filter_download(core::Download* download);
 
   const torrent::Object& get_filter() const { return m_filter; }
-  void                   set_filter(const torrent::Object& s) { m_filter = s; }
+  void                   set_filter(const torrent::Object& s) { check_unlocked(); m_filter = s; }
   const torrent::Object& get_filter_temp() const { return m_temp_filter; }
-  void                   set_filter_temp(const torrent::Object& s) { m_temp_filter = s; }
+  void                   set_filter_temp(const torrent::Object& s) { check_unlocked(); m_temp_filter = s; }
   void                   set_filter_on_event(const std::string& event);
 
   void                   clear_filter_on();
@@ -124,9 +129,9 @@ private:
   View(const View&);
   void        operator=(const View&);
 
-  void        push_back(Download* d) { base_type::push_back(d); }
+  void        push_back(const std::shared_ptr<Download>& d) { base_type::push_back(d); }
 
-  inline void insert_visible(Download* d);
+  inline void insert_visible(const std::shared_ptr<Download>& d);
   inline void erase_internal(iterator itr);
 
   void        emit_changed();
@@ -153,8 +158,8 @@ private:
 
   std::chrono::microseconds m_last_changed{};
 
-  signal_void                    m_signal_changed;
-  torrent::utils::SchedulerEntry m_delay_changed;
+  signal_void                     m_signal_changed;
+  torrent::system::SchedulerEntry m_delay_changed;
 };
 
 } // namespace core

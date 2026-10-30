@@ -7,7 +7,6 @@
 #include <sstream>
 #include <iomanip>
 #include <torrent/exceptions.h>
-#include <torrent/connection_manager.h>
 #include <torrent/rate.h>
 #include <torrent/throttle.h>
 #include <torrent/torrent.h>
@@ -16,9 +15,11 @@
 #include <torrent/data/file_manager.h>
 #include <torrent/download/resource_manager.h>
 #include <torrent/net/http_stack.h>
-#include <torrent/net/network_config.h>
 #include <torrent/net/socket_address.h>
 #include <torrent/peer/client_info.h>
+#include <torrent/runtime/network_config.h>
+#include <torrent/runtime/runtime.h>
+#include <torrent/runtime/socket_manager.h>
 
 #include "control.h"
 #include "globals.h"
@@ -154,7 +155,7 @@ print_download_status(char* first, char* last, core::Download* d) {
 
   } else if (d->tracker_controller().has_active_trackers_not_scrape()) {
     auto tracker = d->tracker_controller().find_if([](const auto& t) {
-      return t.is_busy_not_scrape();
+      return t.is_requesting_not_scrape();
     });
 
     if (tracker.is_valid()) {
@@ -344,7 +345,7 @@ print_status_info(char* first, char* last) {
   if (!torrent::up_throttle_global()->is_throttled()) {
     first = print_buffer(first, last, "[Throttle off");
   } else {
-    first = print_buffer(first, last, "[Throttle %3i", torrent::up_throttle_global()->max_rate() / 1024);
+    first = print_buffer(first, last, "[Throttle %3i", (int)(torrent::up_throttle_global()->max_rate() / 1024));
 
     if (!throttle_up_names.empty())
       first = print_status_throttle_limit(first, last, true, throttle_up_names);
@@ -353,7 +354,7 @@ print_status_info(char* first, char* last) {
   if (!torrent::down_throttle_global()->is_throttled()) {
     first = print_buffer(first, last, " / off KB]");
   } else {
-    first = print_buffer(first, last, " / %3i", torrent::down_throttle_global()->max_rate() / 1024);
+    first = print_buffer(first, last, " / %3i", (int)(torrent::down_throttle_global()->max_rate() / 1024));
 
     if (!throttle_down_names.empty())
       first = print_status_throttle_limit(first, last, false, throttle_down_names);
@@ -376,7 +377,7 @@ print_status_info(char* first, char* last) {
   first = print_buffer(first, last, " KB]");
   first = print_buffer(first, last, " [Port: %i]", (unsigned int)torrent::runtime::listen_port());
 
-  auto local_address = torrent::config::network_config()->local_inet_address();
+  auto local_address = torrent::runtime::network_config()->local_address_best_match();
   auto local_address_in6 = torrent::config::network_config()->local_inet6_address();
 
   if (!torrent::sa_is_any(local_address.get()) || (local_address_in6 != nullptr && !torrent::sa_is_any(local_address_in6.get()))) {
@@ -395,8 +396,8 @@ print_status_info(char* first, char* last) {
   if (first > last)
     throw torrent::internal_error("print_status_info(...) wrote past end of the buffer.");
 
-  auto bind_inet_address  = torrent::config::network_config()->bind_inet_address();
-  auto bind_inet6_address = torrent::config::network_config()->bind_inet6_address();
+  auto bind_inet_address  = torrent::runtime::network_config()->bind_inet_address();
+  auto bind_inet6_address = torrent::runtime::network_config()->bind_inet6_address();
   bool show_bind_inet     = !torrent::sa_is_any(bind_inet_address.get());
   bool show_bind_inet6    = !torrent::sa_is_any(bind_inet6_address.get());
 
@@ -434,9 +435,9 @@ print_status_extra(char* first, char* last) {
                        torrent::net_thread::http_stack()->max_total_connections());
 
   first = print_buffer(first, last, " [S %i/%i/%i]",
-                       torrent::total_handshakes(),
-                       torrent::connection_manager()->size(),
-                       torrent::connection_manager()->max_size());
+                       torrent::runtime::total_handshakes(),
+                       torrent::runtime::socket_manager()->size(),
+                       torrent::runtime::socket_manager()->max_size());
 
   first = print_buffer(first, last, " [F %i/%i]",
                        torrent::file_manager()->open_files(),

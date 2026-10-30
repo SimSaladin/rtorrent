@@ -4,10 +4,12 @@
 
 #include <fstream>
 #include <sstream>
+#include <torrent/exceptions.h>
 #include <torrent/object.h>
 #include <torrent/object_stream.h>
 #include <torrent/rate.h>
 #include <torrent/runtime/network_manager.h>
+#include <torrent/runtime/runtime.h>
 #include <torrent/tracker/dht_controller.h>
 #include <torrent/utils/log.h>
 
@@ -19,10 +21,10 @@
 #include "session/session_manager.h"
 
 #define LT_LOG(log_fmt, ...)                                            \
-  lt_log_print_subsystem(torrent::LOG_DHT_CONTROLLER, "dht_manager", log_fmt, __VA_ARGS__);
+  lt_log_print(torrent::LOG_DHT_CONTROLLER, "dht_manager : " log_fmt, __VA_ARGS__);
 
 #define LT_LOG_ERROR(log_fmt, ...)                                      \
-  lt_log_print_subsystem(torrent::LOG_DHT_ERROR, "dht_manager", log_fmt, __VA_ARGS__);
+  lt_log_print(torrent::LOG_DHT_ERROR, "dht_manager : " log_fmt, __VA_ARGS__);
 
 namespace core {
 
@@ -61,7 +63,14 @@ DhtManager::load_dht_cache() {
     LT_LOG("could not open cache file (path:%s)", cache_filename.c_str());
   }
 
-  torrent::runtime::network_manager()->dht_controller()->initialize(cache);
+  try {
+    torrent::runtime::network_manager()->dht_controller()->initialize(cache);
+
+  } catch (const torrent::base_error& e) {
+    LT_LOG_ERROR("cache file rejected, discarding (path:%s errmsg:%s)", cache_filename.c_str(), e.what());
+
+    torrent::runtime::network_manager()->dht_controller()->initialize(torrent::Object::create_map());
+  }
 
   if (m_start == dht_on)
     start_dht();
@@ -131,31 +140,64 @@ DhtManager::save_dht_cache() {
   torrent::Object cache = torrent::Object::create_map();
   cache_file << *torrent::runtime::network_manager()->dht_controller()->store_cache(&cache);
 
+  // The data only reaches the kernel here, so this is where a full disk is seen.
+  cache_file.close();
+
   if (!cache_file.good())
     return;
-
-  cache_file.close();
 
   ::rename(filename_tmp.c_str(), filename.c_str());
 }
 
 void
-DhtManager::set_mode(const std::string& arg) {
-  int i;
-  for (i = 0; i < dht_settings_num; i++) {
-    if (arg == dht_settings[i]) {
-      m_start = i;
-      break;
-    }
+DhtManager::set_mode_by_user(const std::string& arg) {
+  unsigned int mode = [arg]() {
+      for (int i = 0; i < dht_settings_num; i++) {
+        if (arg == dht_settings[i])
+          return i;
+      }
+
+      throw torrent::input_error("Invalid dht mode: " + arg);
+    }();
+
+  m_set_by_user = true;
+
+  if (!torrent::runtime::is_network_initialized()) {
+    m_start = mode;
+    return;
   }
 
-  if (i == dht_settings_num)
-    throw torrent::input_error("Invalid argument.");
+  set_mode_directly(mode);
+}
+
+void
+DhtManager::set_mode_directly(unsigned int mode) {
+  if (mode >= dht_settings_num)
+    throw torrent::input_error("Invalid dht mode.");
+
+  m_start = mode;
 
   if (m_start == dht_off)
     stop_dht();
   else if (m_start == dht_on)
     start_dht();
+}
+
+void
+DhtManager::set_auto_if_untouched_and_has_session() {
+  if (m_set_by_user) {
+    set_mode_directly(m_start);
+    return;
+  }
+
+  if (rpc::call_command_string("session.path").empty()) {
+    LT_LOG("DHT auto-start disabled, session path not set.", 0);
+    return;
+  }
+
+  set_mode_directly(dht_auto);
+
+  LT_LOG("DHT auto-start enabled.", 0);
 }
 
 void

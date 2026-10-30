@@ -12,11 +12,6 @@
 
 namespace scgi {
 
-class ThreadScgiInternal {
-public:
-  static ThreadScgi* thread_scgi() { return ThreadScgi::internal_thread_scgi(); }
-};
-
 ThreadScgi* ThreadScgi::m_thread_scgi{};
 
 void
@@ -60,7 +55,7 @@ ThreadScgi::set_scgi(rpc::SCgi* scgi) {
 
   change_rpc_log();
 
-  callback(nullptr, [this]() {
+  callback([this]() {
       if (m_scgi == nullptr)
         throw torrent::internal_error("Tried to start SCGI but object was not present.");
 
@@ -72,7 +67,7 @@ ThreadScgi::set_scgi(rpc::SCgi* scgi) {
 
 void
 ThreadScgi::set_rpc_log(const std::string& filename) {
-  callback(nullptr, [this, filename]() {
+  callback([this, filename]() {
       m_rpc_log_filename = filename;
       change_rpc_log();
     });
@@ -87,7 +82,7 @@ ThreadScgi::change_rpc_log() {
     ::close(scgi()->log_fd());
     scgi()->set_log_fd(-1);
 
-    lt_log_print(torrent::LOG_NOTICE, "Closed RPC log.", 0);
+    lt_log_print(torrent::LOG_EVENTS, "Closed RPC log.", 0);
   }
 
   if (m_rpc_log_filename.empty())
@@ -96,11 +91,11 @@ ThreadScgi::change_rpc_log() {
   scgi()->set_log_fd(open(expand_path(m_rpc_log_filename).c_str(), O_WRONLY | O_APPEND | O_CREAT, 0644));
 
   if (scgi()->log_fd() == -1) {
-    lt_log_print(torrent::LOG_NOTICE, "Could not open RPC log file '%s'.", m_rpc_log_filename.c_str());
+    lt_log_print(torrent::LOG_EVENTS, "Could not open RPC log file '%s'.", m_rpc_log_filename.c_str());
     return;
   }
 
-  lt_log_print(torrent::LOG_NOTICE, "Logging RPC events to '%s'.", m_rpc_log_filename.c_str());
+  lt_log_print(torrent::LOG_EVENTS, "Logging RPC events to '%s'.", m_rpc_log_filename.c_str());
 }
 
 void
@@ -127,15 +122,13 @@ ThreadScgi::next_timeout() {
 
 namespace scgi_thread {
 
-torrent::utils::Thread* thread()                         { return scgi::ThreadScgiInternal::thread_scgi(); }
-std::thread::id         thread_id()                      { return scgi::ThreadScgiInternal::thread_scgi()->thread_id(); }
+torrent::system::Thread* thread()                         { return scgi::ThreadScgi::thread_scgi(); }
+std::thread::id          thread_id()                      { return scgi::ThreadScgi::thread_scgi()->thread_id(); }
 
-void callback(void* target, std::function<void ()>&& fn) { scgi::ThreadScgiInternal::thread_scgi()->callback(target, std::move(fn)); }
-void cancel_callback(void* target)                       { scgi::ThreadScgiInternal::thread_scgi()->cancel_callback(target); }
-void cancel_callback_and_wait(void* target)              { scgi::ThreadScgiInternal::thread_scgi()->cancel_callback_and_wait(target); }
+void        callback_interrupt(torrent::system::callback_id& id, std::function<void ()>&& fn) { scgi::ThreadScgi::thread_scgi()->callback_interrupt(id, std::move(fn)); }
 
-rpc::SCgi*  scgi()                                       { return scgi::ThreadScgiInternal::thread_scgi()->scgi(); }
-void        set_scgi(rpc::SCgi* scgi)                    { scgi::ThreadScgiInternal::thread_scgi()->set_scgi(scgi); }
-void        set_rpc_log(const std::string& filename)     { scgi::ThreadScgiInternal::thread_scgi()->set_rpc_log(filename); }
+rpc::SCgi*  scgi()                                       { return scgi::ThreadScgi::thread_scgi()->scgi(); }
+void        set_scgi(rpc::SCgi* scgi)                    { scgi::ThreadScgi::thread_scgi()->set_scgi(scgi); }
+void        set_rpc_log(const std::string& filename)     { scgi::ThreadScgi::thread_scgi()->set_rpc_log(filename); }
 
 } // namespace scgi_thread

@@ -1,8 +1,10 @@
 #ifndef RTORRENT_CORE_DOWNLOAD_LIST_H
 #define RTORRENT_CORE_DOWNLOAD_LIST_H
 
+#include <cstdint>
 #include <iosfwd>
 #include <list>
+#include <memory>
 #include <string>
 
 namespace torrent {
@@ -20,9 +22,9 @@ class Download;
 //
 // Fix apply_on_ratio if the base_type is changed.
 
-class DownloadList : private std::list<Download*> {
+class DownloadList : private std::list<std::shared_ptr<Download>> {
 public:
-  typedef std::list<Download*>               base_type;
+  typedef std::list<std::shared_ptr<Download>> base_type;
 
   using base_type::iterator;
   using base_type::const_iterator;
@@ -64,8 +66,17 @@ public:
   bool                open(Download* d);
   void                open_throw(Download* d);
 
+  // Overloads for the list's own entries, so callers iterating it do not need
+  // to unwrap.
+  bool                open(const value_type& d)          { return open(d.get()); }
+  void                close(const value_type& d)         { close(d.get()); }
+  void                close_quick(const value_type& d)   { close_quick(d.get()); }
+  void                pause(const value_type& d)         { pause(d.get()); }
+  void                resume(const value_type& d)        { resume(d.get()); }
+
   void                close(Download* d);
   void                close_directly(Download* d);
+  void                close_files(Download* d);
   void                close_quick(Download* d);
   void                close_throw(Download* d);
 
@@ -122,6 +133,9 @@ private:
 
   void                hash_done(Download* d);
   void                hash_queue(Download* d, int type);
+
+  void                set_state_stopped(Download* d);
+  void                update_paused_state(Download* d);
 
   inline void         check_contains(Download* d);
 

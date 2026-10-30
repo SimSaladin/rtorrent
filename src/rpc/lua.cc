@@ -10,6 +10,10 @@
 
 #ifdef HAVE_LUA
 #include <lua.hpp>
+// LUA_OK was introduced in Lua 5.2; define for Lua 5.1 and LuaJIT2.0.
+#ifndef LUA_OK
+#define LUA_OK 0
+#endif
 #endif
 
 #include <torrent/object.h>
@@ -211,7 +215,7 @@ object_to_target(const torrent::Object& obj, int call_flags, rpc::target_type* t
         auto tracker = new torrent::tracker::Tracker(rpc.slot_find_tracker()(download, std::stoi(std::string(index))));
 
         *deleter = [tracker]() { delete tracker; };
-        *target = rpc::make_target(command_base::target_tracker, target);
+        *target  = rpc::make_target(command_base::target_tracker, tracker);
       }
       break;
 
@@ -390,6 +394,10 @@ execute_lua(LuaEngine* engine, rpc::target_type target_type, torrent::Object con
   switch (raw_args.type()) {
   case torrent::Object::TYPE_LIST: {
     const torrent::Object::list_type& args = raw_args.as_list();
+
+    if (args.empty())
+      throw torrent::input_error("Too few arguments.");
+
     if (flags & LuaEngine::flag_string) {
       check_lua_status(l_state, luaL_loadstring(l_state, args.begin()->as_string().c_str()));
     } else {

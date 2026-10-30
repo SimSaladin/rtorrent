@@ -6,6 +6,7 @@
 #include <sstream>
 #include <torrent/exceptions.h>
 #include <torrent/torrent.h>
+#include <torrent/runtime/runtime.h>
 #include <torrent/utils/log.h>
 #include <torrent/utils/string_manip.h>
 
@@ -28,6 +29,38 @@
 #include "ui/root.h"
 
 namespace ui {
+
+std::string
+create_filter_pattern(const std::string& input) {
+  std::string pattern = input;
+
+  if (pattern.empty())
+    return pattern;
+
+  if (pattern.back() != '$')
+    pattern = pattern + ".*";
+  if (pattern.front() != '^')
+    pattern = ".*" + pattern;
+
+  std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::tolower);
+  return pattern;
+}
+
+torrent::Object
+create_filter_command(const std::string& pattern) {
+  torrent::Object name = torrent::Object::create_dict_key();
+  name.as_dict_key() = "d.name";
+
+  torrent::Object args = torrent::Object::create_list();
+  args.as_list().push_back(name);
+  args.as_list().push_back(torrent::Object(pattern));
+
+  torrent::Object command = torrent::Object::create_dict_key();
+  command.as_dict_key() = "match";
+  command.as_dict_obj() = args;
+
+  return command;
+}
 
 DownloadList::DownloadList() {
   m_uiArray[DISPLAY_DOWNLOAD]      = NULL;
@@ -88,7 +121,7 @@ DownloadList::unfocus_download(core::Download* d) {
   if (m_state == DISPLAY_DOWNLOAD && d == static_cast<Download*>(m_uiArray[DISPLAY_DOWNLOAD])->download())
     activate_display(DISPLAY_DOWNLOAD_LIST);
 
-  if (*current_view()->focus() == d && current_view()->focus() < current_view()->end_visible())
+  if (current_view()->focus() < current_view()->end_visible() && current_view()->focus()->get() == d)
       current_view()->next_focus();
 }
 
@@ -176,7 +209,7 @@ DownloadList::activate_display(Display displayType) {
   switch (displayType) {
   case DISPLAY_DOWNLOAD_LIST:
     control->ui()->window_title()->set_title("rTorrent " PACKAGE_VERSION "/" +
-                                             std::string(torrent::version()) + " - " +
+                                             std::string(torrent::runtime::version()) + " - " +
                                              rpc::call_command_string("session.name"));
     break;
   case DISPLAY_LOG:
@@ -322,16 +355,12 @@ DownloadList::receive_exit_input(Input type) {
         current_view()->filter();
         current_view()->sort();
       } else {
-        std::string pattern = input->str();
-        if (pattern.back() != '$')
-          pattern = pattern + ".*";
-        if (pattern.front() != '^')
-          pattern = ".*" + pattern;
-        std::transform(pattern.begin(), pattern.end(), pattern.begin(), ::tolower);
-        std::string temp_filter = "match={d.name=," + pattern + "}";
+        std::string pattern = create_filter_pattern(input->str());
+
         if (rpc::call_command_value("view.filter.temp.log"))
           control->core()->push_log_std("Temporary filter on '" + current_view()->name() + "' view: " + pattern);
-        current_view()->set_filter_temp(temp_filter);
+
+        current_view()->set_filter_temp(create_filter_command(pattern));
         current_view()->filter();
       }
       break;
@@ -346,7 +375,7 @@ DownloadList::receive_exit_input(Input type) {
     }
 
   } catch (torrent::input_error& e) {
-    lt_log_print(torrent::LOG_WARN, "Input failed: %s", e.what());
+    lt_log_print(torrent::LOG_ERRORS, "Input failed: %s", e.what());
   }
 
   activate_display(DISPLAY_DOWNLOAD_LIST);

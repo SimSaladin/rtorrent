@@ -37,6 +37,9 @@
 
 #include <string>
 #include <cstring>
+#include <functional>
+#include <utility>
+#include <vector>
 
 #include "xmlrpc.h"
 #include "rpc_manager.h"
@@ -52,7 +55,11 @@ typedef std::pair<torrent::Object, const char*> parse_command_type;
 // The generic parse command function, used by the rest. At some point
 // the 'download' parameter should be replaced by a more generic one.
 parse_command_type     parse_command(target_type target, const char* first, const char* last);
-torrent::Object        parse_command_multiple(target_type target, const char* first, const char* last);
+
+// The optional 'after_each' is called after every command, and may throw to
+// stop the rest.
+torrent::Object        parse_command_multiple(target_type target, const char* first, const char* last,
+                                              const std::function<void()>& after_each = {});
 
 void                   parse_command_execute(target_type target, torrent::Object* object);
 
@@ -67,9 +74,38 @@ parse_command_single(target_type target, const std::string& cmd) {
   return parse_command(target, cmd.c_str(), cmd.c_str() + cmd.size()).first;
 }
 
+// Parse one RPC command without executing it. Repeated evaluations can use
+// call_object on the result, which handles per-target argument expansion.
+torrent::Object        parse_command_object(const char* first, const char* last);
+
+inline torrent::Object parse_command_object(const std::string& cmd) {
+  return parse_command_object(cmd.c_str(), cmd.c_str() + cmd.size());
+}
+
+// Prepare a multicall's commands once, on the first target that uses them. This
+// keeps empty target lists from parsing commands that would never be evaluated.
+struct preparsed_commands : public std::vector<torrent::Object> {
+  explicit preparsed_commands(std::function<void(preparsed_commands&)> prepare)
+    : m_prepare(std::move(prepare)) {}
+
+  void prepare_if_needed() {
+    if (m_prepare) {
+      // Clear before invoking: the callback may inspect this vector, and a
+      // throwing callback must not be run again against partially added items.
+      auto prepare = std::move(m_prepare);
+      m_prepare = {};
+      prepare(*this);
+    }
+  }
+
+private:
+  std::function<void(preparsed_commands&)> m_prepare;
+};
+
 inline torrent::Object
-parse_command_multiple_std(const std::string& cmd, target_type target = rpc::make_target()) {
-  return parse_command_multiple(target, cmd.c_str(), cmd.c_str() + cmd.size());
+parse_command_multiple_std(const std::string& cmd, target_type target = rpc::make_target(),
+                           const std::function<void()>& after_each = {}) {
+  return parse_command_multiple(target, cmd.c_str(), cmd.c_str() + cmd.size(), after_each);
 }
 
 inline void
@@ -106,6 +142,10 @@ call_command_d_range(const char* key, core::Download* download, torrent::Object:
 
   return commands.call_command_d(key, download, rawArgs);
 }
+
+// A command that call_object() can run. Only 'foo=...' strings for now, as the
+// bencode parser cannot hold the dict_key form that '(foo, ...)' parses into.
+bool            is_valid_command(const torrent::Object& command);
 
 torrent::Object call_object(const torrent::Object& command, target_type target = make_target());
 

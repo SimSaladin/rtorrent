@@ -25,7 +25,10 @@ WindowFileList::WindowFileList(const ui::ElementFileList* element) :
 // Convert std::string to std::wstring of given width (in screen positions),
 // taking into account that some characters may be occupying two screen positions.
 std::wstring
-wstring_width(const std::string& i_str, [[maybe_unused]] int width) {
+wstring_width(const std::string& i_str, int width) {
+  if (width < 0)
+    width = 0;
+
   std::wstring result(width + 1, L' ');
   size_t length = std::mbstowcs(result.data(), i_str.c_str(), width);
 
@@ -135,8 +138,11 @@ WindowFileList::redraw() {
       m_canvas->print(0, pos, "%*c%-*s", 16, ' ', filenameWidth, "EMPTY");
 
     } else if (itr.is_entering()) {
-      m_canvas->print(0, pos, "%*c %ls", 16 + itr.depth(), '\\',
-                      itr.depth() < itr.file()->path()->size() ? wstring_width(itr.file()->path()->at(itr.depth()), filenameWidth - itr.depth() - 1).c_str() : L"UNKNOWN");
+      if (itr.depth() < itr.file()->path()->size())
+        m_canvas->print(0, pos, "%*c %ls", 16 + itr.depth(), '\\',
+                        wstring_width(itr.file()->path()->at(itr.depth()).str(), filenameWidth - itr.depth() - 1).c_str());
+      else
+        m_canvas->print(0, pos, "%*c %ls", 16 + itr.depth(), '\\', L"UNKNOWN");
 
     } else if (itr.is_leaving()) {
       m_canvas->print(0, pos, "%*c %-*s", 16 + (itr.depth() - 1), '/', filenameWidth - (itr.depth() - 1), "");
@@ -166,8 +172,12 @@ WindowFileList::redraw() {
       else
         m_canvas->print(8, pos, "%5.1f T", (double)val / (int64_t(1) << 40));
 
-      m_canvas->print(15, pos, "%*c %ls", 1 + itr.depth(), '|',
-                      itr.depth() < itr.file()->path()->size() ? wstring_width(itr.file()->path()->at(itr.depth()), filenameWidth - itr.depth() - 1).c_str() : L"UNKNOWN");
+      if (itr.depth() < itr.file()->path()->size())
+        m_canvas->print(15, pos, "%*c %ls", 1 + itr.depth(), '|',
+                        wstring_width(itr.file()->path()->at(itr.depth()).str(), filenameWidth - itr.depth() - 1).c_str());
+      else
+        m_canvas->print(15, pos, "%*c %ls", 1 + itr.depth(), '|', L"UNKNOWN");
+
 
     } else {
       m_canvas->print(0, pos, "BORK BORK");

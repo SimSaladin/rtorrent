@@ -2,7 +2,12 @@
 
 #include "test/rpc/test_command.h"
 
+#include <cstring>
+#include <torrent/exceptions.h>
+
+#include "command_helpers.h"
 #include "rpc/command.h"
+#include "rpc/parse_commands.h"
 
 CPPUNIT_TEST_SUITE_REGISTRATION(TestCommand);
 
@@ -82,4 +87,98 @@ TestCommand::test_stack_double() {
 
   rpc::command_base::pop_stack(&stack_first, last_stack_first);
   CPPUNIT_ASSERT(command_stack_all_empty());
+}
+
+void
+TestCommand::test_is_valid_command() {
+  CPPUNIT_ASSERT(rpc::is_valid_command(std::string("d.custom1.set=label")));
+  CPPUNIT_ASSERT(rpc::is_valid_command(std::string(" \td.stop = ")));
+  CPPUNIT_ASSERT(rpc::is_valid_command(std::string("d.start=;d.stop=")));
+
+  CPPUNIT_ASSERT(!rpc::is_valid_command(std::string()));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(std::string("d.stop")));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(std::string("=label")));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(std::string("1d.stop=")));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(std::string("d stop=")));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(int64_t(1)));
+  CPPUNIT_ASSERT(!rpc::is_valid_command(torrent::Object::create_list()));
+}
+
+void
+TestCommand::test_preparsed_commands() {
+  unsigned int prepare_count = 0;
+  rpc::preparsed_commands commands([&prepare_count](auto& prepared) {
+    ++prepare_count;
+    // Reentrant access must not invoke the same callback recursively.
+    prepared.prepare_if_needed();
+    prepared.push_back(rpc::parse_command_object("string.length=abc"));
+  });
+
+  CPPUNIT_ASSERT_EQUAL(0u, prepare_count);
+  CPPUNIT_ASSERT(commands.empty());
+
+  commands.prepare_if_needed();
+  CPPUNIT_ASSERT_EQUAL(1u, prepare_count);
+
+  size_t count = 0;
+  for (auto& itr : commands) {
+    CPPUNIT_ASSERT(itr.is_dict_key());
+    ++count;
+  }
+
+  CPPUNIT_ASSERT_EQUAL(size_t(1), count);
+  CPPUNIT_ASSERT_EQUAL(1u, prepare_count);
+
+  for (auto& itr : commands)
+    CPPUNIT_ASSERT(itr.is_dict_key());
+
+  CPPUNIT_ASSERT_EQUAL(1u, prepare_count);
+}
+
+void
+TestCommand::test_parse_command_object() {
+  auto command = rpc::parse_command_object("\tstring.length=abc  ");
+  CPPUNIT_ASSERT(command.is_dict_key());
+  CPPUNIT_ASSERT_EQUAL(std::string("string.length"), command.as_dict_key());
+
+  // This helper has no way to return the next-command pointer, so it must not
+  // silently accept a multipart command separated by ';'.
+  CPPUNIT_ASSERT_THROW(rpc::parse_command_object("string.length=abc;string.length=def"), torrent::input_error);
+
+  // Unlike parse_command (which parses command files), this helper handles one
+  // multicall command and must reject newline boundaries, including CRLF.
+  CPPUNIT_ASSERT_THROW(rpc::parse_command_object("string.length=abc\nstring.length=def"), torrent::input_error);
+  CPPUNIT_ASSERT_THROW(rpc::parse_command_object("string.length=abc\r\nstring.length=def"), torrent::input_error);
+}
+
+// The callback runs after each command of a ';'-separated string, and a throw
+// from it stops the commands that follow.
+void
+TestCommand::test_parse_command_multiple_after_each() {
+  static int64_t command_count = 0;
+
+  if (!rpc::commands.has("test.command.count"))
+    CMD2_ANY("test.command.count", [](auto, auto&) { return torrent::Object(++command_count); });
+
+  const char* commands = "test.command.count=;test.command.count=;test.command.count=";
+  const char* last     = commands + std::strlen(commands);
+  int         calls    = 0;
+
+  command_count = 0;
+  rpc::parse_command_multiple(rpc::make_target(), commands, last, [&calls]() { calls++; });
+
+  CPPUNIT_ASSERT_EQUAL(int64_t(3), command_count);
+  CPPUNIT_ASSERT_EQUAL(3, calls);
+
+  command_count = 0;
+  calls         = 0;
+
+  CPPUNIT_ASSERT_THROW(rpc::parse_command_multiple(rpc::make_target(), commands, last, [&calls]() {
+                           if (++calls == 2)
+                             throw torrent::input_error("stop");
+                         }),
+                       torrent::input_error);
+
+  CPPUNIT_ASSERT_EQUAL(int64_t(2), command_count);
+  CPPUNIT_ASSERT_EQUAL(2, calls);
 }

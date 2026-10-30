@@ -1,10 +1,13 @@
 #ifndef RTORRENT_SESSION_SESSION_MANAGER_H
 #define RTORRENT_SESSION_SESSION_MANAGER_H
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <future>
 #include <list>
+#include <cstdint>
+#include <sys/types.h>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -44,7 +47,7 @@ public:
   constexpr static int max_concurrent_processing = 16;
   constexpr static int max_cleanup_processing    = 64;
 
-  SessionManager(torrent::utils::Thread* thread);
+  SessionManager(torrent::system::Thread* thread);
   ~SessionManager();
 
   bool                is_used() const;
@@ -57,6 +60,10 @@ public:
 
   bool                use_lock() const;
   void                set_use_lock(bool use_lock);
+
+  int                 umask() const;
+  void                set_umask(int64_t umask);
+  mode_t              file_mode() const;
 
   void                save_full_download(core::Download* download);
   void                save_resume_download(core::Download* download);
@@ -72,6 +79,7 @@ protected:
   void                cleanup();
 
   void                flush_all_pending_builds();
+  void                flush_shutdown_saves();
 
 private:
   void                callback_pending_builds();
@@ -89,43 +97,54 @@ private:
   bool                replace_save_request_unsafe(SaveRequest& download);
   bool                remove_completely_unsafe(core::Download* download, std::unique_lock<std::mutex>& lock);
 
-  torrent::utils::Thread* m_thread;
+  using ProcessingSave = std::pair<std::future<int>, SaveRequest>;
 
-  bool                m_freeze_info{};
-  std::string         m_path;
-  bool                m_use_fsyncdisk{true};
-  bool                m_use_lock{true};
+  void                consume_finished_save_unsafe(ProcessingSave& request);
+  void                report_storage_error_unsafe(const std::string& what);
 
-  std::mutex          m_mutex;
-  bool                m_active{};
+  torrent::system::Thread*     m_thread;
+  torrent::system::callback_id m_callback_id;
 
-  typedef std::pair<std::future<void>, SaveRequest> ProcessingSave;
+  bool                         m_freeze_info{};
+  std::string                  m_path;
+  bool                         m_use_fsyncdisk{true};
+  bool                         m_use_lock{true};
+  int                          m_umask{};
 
-  std::deque<SaveRequest>     m_save_requests;
-  std::atomic<size_t>         m_save_request_counter{};
-  std::list<ProcessingSave>   m_processing_saves;
-  std::atomic<size_t>         m_processing_save_counter{};
-  std::condition_variable     m_finished_condition;
-  std::vector<ProcessingSave> m_finished_saves;
+  align_cacheline
 
-  std::atomic<bool>           m_callback_scheduled_process_pending_builds{};
-  std::atomic<bool>           m_callback_scheduled_process_saves_request{};
-  std::atomic<bool>           m_callback_scheduled_process_finished_saves{};
+  std::atomic<bool>            m_active{};
+
+  align_cacheline
+
+  std::mutex                   m_mutex;
+
+  std::deque<SaveRequest>      m_save_requests;
+  std::atomic<size_t>          m_save_request_counter{};
+  std::list<ProcessingSave>    m_processing_saves;
+  std::atomic<size_t>          m_processing_save_counter{};
+  std::condition_variable      m_finished_condition;
+  std::vector<ProcessingSave>  m_finished_saves;
+
+  std::atomic<bool>            m_callback_scheduled_process_pending_builds{};
+  std::atomic<bool>            m_callback_scheduled_process_saves_request{};
+  std::atomic<bool>            m_callback_scheduled_process_finished_saves{};
 
   std::unique_ptr<utils::Lockfile> m_lockfile;
 
-  std::chrono::microseconds   m_last_storage_error_message{};
-  unsigned int                m_ignored_storage_error_count{};
+  std::chrono::microseconds    m_last_storage_error_message{};
+  unsigned int                 m_ignored_storage_error_count{};
 
   // Pending builds are only ever locked by main thread.
-  std::mutex                  m_pending_builds_mutex;
-  std::deque<core::Download*> m_pending_builds;
+  std::mutex                   m_pending_builds_mutex;
+  std::deque<core::Download*>  m_pending_builds;
 };
 
 inline bool        SessionManager::is_used() const            { return !m_path.empty(); }
 inline std::string SessionManager::path() const               { return m_path; }
-inline bool        SessionManager::use_fsyncdisk() const      { return true; }
+inline bool        SessionManager::use_fsyncdisk() const      { return m_use_fsyncdisk; }
 inline bool        SessionManager::use_lock() const           { return m_use_lock; }
+inline int         SessionManager::umask() const              { return m_umask; }
 inline void        SessionManager::flush_all_pending_builds() { process_pending_builds(true); }
 
 } // namespace session

@@ -2,6 +2,8 @@
 
 #include "test/src/test_command_dynamic.h"
 
+#include "helpers/assert.h"
+
 #include "control.h"
 #include "globals.h"
 #include "rpc/parse_commands.h"
@@ -60,4 +62,52 @@ TestCommandDynamic::test_old_style() {
 
   rpc::commands.call_command("method.insert", rpc::create_object_list("test_old_style.4", "simple", "cat=test.3"));
   CPPUNIT_ASSERT(rpc::commands.call_command("test_old_style.4", torrent::Object()).as_string() == "test.3");
+}
+
+void
+TestCommandDynamic::test_insert_list() {
+  torrent::Object key_only = torrent::Object::create_list();
+  key_only.as_list().push_back("test_insert_list.1");
+
+  rpc::commands.call_command("method.insert.list", key_only);
+
+  torrent::Object result = rpc::commands.call_command("test_insert_list.1", torrent::Object());
+
+  CPPUNIT_ASSERT(result.is_list());
+  CPPUNIT_ASSERT(result.as_list().empty());
+
+  rpc::commands.call_command("method.insert.list",
+                             rpc::create_object_list("test_insert_list.2", rpc::create_object_list("a", "b")));
+
+  torrent::Object filled = rpc::commands.call_command("test_insert_list.2", torrent::Object());
+
+  CPPUNIT_ASSERT(filled.is_list());
+  CPPUNIT_ASSERT_EQUAL((size_t)2, filled.as_list().size());
+}
+
+void
+TestCommandDynamic::test_value_base() {
+  auto value = [](std::initializer_list<torrent::Object> objects) {
+    auto args = torrent::Object::create_list();
+
+    for (const auto& object : objects)
+      args.as_list().push_back(object);
+
+    return rpc::commands.call_command("value", args).as_value();
+  };
+
+  CPPUNIT_ASSERT_EQUAL(int64_t(10), value({"10"}));
+  CPPUNIT_ASSERT_EQUAL(int64_t(255), value({"ff", int64_t(16)}));
+
+  // strtoll only defines base 0 and base 2 through 36.
+  ASSERT_CATCH_INPUT_ERROR( { value({"10", int64_t(1)}); } );
+  ASSERT_CATCH_INPUT_ERROR( { value({"10", int64_t(37)}); } );
+  ASSERT_CATCH_INPUT_ERROR( { value({"10", int64_t(-1)}); } );
+
+  // An out-of-range base must not be narrowed into a valid one.
+  ASSERT_CATCH_INPUT_ERROR( { value({"10", int64_t(1) << 40}); } );
+  ASSERT_CATCH_INPUT_ERROR( { value({"ff", (int64_t(1) << 32) + 16}); } );
+
+  // A number too large for the result must be rejected, not clamped.
+  ASSERT_CATCH_INPUT_ERROR( { value({"99999999999999999999999"}); } );
 }

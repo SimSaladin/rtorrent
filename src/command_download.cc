@@ -5,11 +5,10 @@
 #include <functional>
 #include <netdb.h>
 #include <unistd.h>
-#include <rak/regex.h>
+#include <fnmatch.h>
 #include <torrent/rate.h>
 #include <torrent/throttle.h>
 #include <torrent/tracker/tracker.h>
-#include <torrent/connection_manager.h>
 #include <torrent/data/download_data.h>
 #include <torrent/data/file.h>
 #include <torrent/data/file_list.h>
@@ -18,6 +17,7 @@
 #include <torrent/net/types.h>
 #include <torrent/peer/connection_list.h>
 #include <torrent/peer/peer_list.h>
+#include <torrent/system/callbacks.h>
 #include <torrent/utils/file_stat.h>
 #include <torrent/utils/log.h>
 #include <torrent/utils/option_strings.h>
@@ -32,31 +32,34 @@
 #include "control.h"
 #include "command_helpers.h"
 
-std::string
+torrent::string_utf8
 retrieve_d_base_path(core::Download* download) {
   if (download->file_list()->is_multi_file())
     return download->file_list()->frozen_root_dir();
-  else
-    return download->file_list()->empty() ? std::string() : download->file_list()->at(0)->frozen_path();
+
+  if (download->file_list()->empty())
+    return {};
+
+  return download->file_list()->at(0)->frozen_path();
 }
 
-std::string
+torrent::string_utf8
 retrieve_d_base_filename(core::Download* download) {
-  const std::string* base;
+  torrent::string_utf8 base_path;
 
   if (download->file_list()->is_multi_file())
-    base = &download->file_list()->frozen_root_dir();
-  else if (download->file_list()->empty())
-    return std::string();
+    base_path = download->file_list()->frozen_root_dir();
+  else if (!download->file_list()->empty())
+    base_path = download->file_list()->at(0)->frozen_path();
   else
-    base = &download->file_list()->at(0)->frozen_path();
+    return {};
 
-  std::string::size_type split = base->rfind('/');
+  auto split = base_path.str().rfind('/');
 
   if (split == std::string::npos)
-    return *base;
-  else
-    return base->substr(split + 1);
+    return base_path;
+
+  return torrent::string_utf8::from_string(base_path.str().substr(split + 1));
 }
 
 torrent::Object
@@ -104,7 +107,7 @@ apply_d_change_link(core::Download* download, const torrent::Object::list_type& 
   switch (changeType) {
   case 0:
     if (symlink(target.c_str(), link.c_str()) == -1)
-      lt_log_print(torrent::LOG_TORRENT_WARN, "create_link failed: %s", std::strerror(errno));
+      lt_log_print(torrent::LOG_TORRENT_DEBUG, "create_link failed: %s", std::strerror(errno));
 
     break;
 
@@ -114,7 +117,7 @@ apply_d_change_link(core::Download* download, const torrent::Object::list_type& 
     errno = 0;
 
     if (!fileStat.update_link(link) || !fileStat.is_link() || unlink(link.c_str()) == -1)
-      lt_log_print(torrent::LOG_TORRENT_WARN, "delete_link failed: %s", std::strerror(errno));
+      lt_log_print(torrent::LOG_TORRENT_DEBUG, "delete_link failed: %s", std::strerror(errno));
 
     break;
   }
@@ -132,21 +135,11 @@ apply_d_delete_tied(core::Download* download) {
   if (tie.empty())
     return torrent::Object();
 
-  if (::unlink(expand_path(tie).c_str()) == -1)
+  if (unlink(expand_path(tie).c_str()) == -1)
     control->core()->push_log_std("Could not unlink tied file: " + std::string(std::strerror(errno)));
 
   rpc::call_command("d.tied_to_file.set", std::string(), rpc::make_target(download));
   return torrent::Object();
-}
-
-void
-apply_d_directory(core::Download* download, const std::string& name) {
-  if (!download->file_list()->is_multi_file())
-    download->set_root_directory(name);
-  else if (name.empty() || *name.rbegin() == '/')
-    download->set_root_directory(name + download->info()->name());
-  else
-    download->set_root_directory(name + "/" + download->info()->name());
 }
 
 torrent::Object
@@ -160,8 +153,8 @@ apply_d_connection_type(core::Download* download, const std::string& name) {
 
 torrent::Object
 apply_d_choke_heuristics(core::Download* download, const std::string& name, bool is_down) {
-  torrent::Download::HeuristicType t =
-    (torrent::Download::HeuristicType)torrent::option_find_string(torrent::OPTION_CHOKE_HEURISTICS, name.c_str());
+  torrent::heuristics_enum t =
+    static_cast<torrent::heuristics_enum>(torrent::option_find_string(torrent::OPTION_CHOKE_HEURISTICS, name.c_str()));
 
   if (is_down)
     download->download()->set_download_choke_heuristic(t);
@@ -271,16 +264,6 @@ retrieve_d_custom_map(core::Download* download, bool keys_only, const torrent::O
   return result;
 }
 
-torrent::Object
-retrieve_d_bitfield(core::Download* download) {
-  const torrent::Bitfield* bitField = download->download()->file_list()->bitfield();
-
-  if (bitField->empty())
-    return torrent::Object("");
-
-  return torrent::Object(torrent::utils::transform_to_hex_str(*bitField));
-}
-
 void
 apply_d_add_peer(core::Download* download, const std::string& arg) {
   int port, ret;
@@ -305,10 +288,12 @@ apply_d_add_peer(core::Download* download, const std::string& arg) {
 
   assert(std::this_thread::get_id() == torrent::main_thread::thread_id());
 
+  auto callback_id = torrent::system::make_callback_id();
+
   // Currently discarding SOCK_STREAM.
-  torrent::this_thread::resolver()->resolve_preferred(NULL, host, AF_UNSPEC, AF_INET, [download, port](torrent::c_sa_shared_ptr sa, int err) {
+  torrent::this_thread::resolver()->resolve_preferred(callback_id, host, AF_UNSPEC, AF_INET, [download, port](torrent::c_sa_shared_ptr sa, int err) {
       if (sa == nullptr) {
-        lt_log_print(torrent::LOG_TORRENT_WARN, "could not resolve hostname for added peer: %s", gai_strerror(err));
+        lt_log_print(torrent::LOG_TORRENT_DEBUG, "could not resolve hostname for added peer: %s", gai_strerror(err));
         return;
       }
 
@@ -345,9 +330,14 @@ f_multicall(core::Download* download, const torrent::Object::list_type& args) {
   // parsing and searching command map for every single call.
   torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
-  std::vector<rak::regex>     regex_list;
+  std::vector<std::string>    regex_list;
 
   bool use_regex = true;
+
+  rpc::preparsed_commands commands([&args](auto& cmds) {
+    for (auto cItr = ++args.begin(); cItr != args.end(); ++cItr)
+      cmds.push_back(rpc::parse_command_object(cItr->as_string()));
+  });
 
   if (args.front().is_list())
     for (const auto& o : args.front().as_list())
@@ -359,15 +349,15 @@ f_multicall(core::Download* download, const torrent::Object::list_type& args) {
 
   for (const auto& file : *download->file_list()) {
     if (use_regex &&
-        std::none_of(regex_list.begin(), regex_list.end(), [&file](const auto& r) { return r(file->path()->as_string()); }))
+        std::none_of(regex_list.begin(), regex_list.end(), [&file](const auto& pattern) { return fnmatch(pattern.c_str(), file->path()->as_string().c_str(), 0) == 0; }))
       continue;
 
     torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_const_iterator cItr = ++args.begin(); cItr != args.end(); cItr++) {
-      const std::string& cmd = cItr->as_string();
-      row.push_back(rpc::parse_command(rpc::make_target(file.get()), cmd.c_str(), cmd.c_str() + cmd.size()).first);
-    }
+    // Defer parsing until a file actually matches the multicall selection.
+    commands.prepare_if_needed();
+    for (auto& itr : commands)
+      row.push_back(rpc::call_object(itr, rpc::make_target(file.get())));
   }
 
   return resultRaw;
@@ -383,21 +373,26 @@ t_multicall(core::Download* download, const torrent::Object::list_type& args) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  torrent::Object             result_raw = torrent::Object::create_list();
-  torrent::Object::list_type& result     = result_raw.as_list();
+
+  auto  result_raw = torrent::Object::create_list();
+  auto& result     = result_raw.as_list();
+
+  rpc::preparsed_commands commands([&args](auto& cmds) {
+    for (auto cItr = ++args.begin(); cItr != args.end(); ++cItr)
+      cmds.push_back(rpc::parse_command_object(cItr->as_string()));
+  });
 
   for (uint32_t idx = 0, last = download->tracker_list_size(); idx < last; idx++) {
-    auto& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
+    auto& row     = result.insert(result.end(), torrent::Object::create_list())->as_list();
     auto  tracker = download->tracker_controller().at(idx);
 
     if (!tracker.is_valid())
       continue;
 
-    for (torrent::Object::list_const_iterator cItr = ++args.begin(); cItr != args.end(); cItr++) {
-      const std::string& cmd = cItr->as_string();
-
-      row.push_back(rpc::parse_command(rpc::make_target(&tracker), cmd.c_str(), cmd.c_str() + cmd.size()).first);
-    }
+    // Do not parse columns when there are no valid tracker targets.
+    commands.prepare_if_needed();
+    for (auto& itr : commands)
+      row.push_back(rpc::call_object(itr, rpc::make_target(&tracker)));
   }
 
   return result_raw;
@@ -413,16 +408,29 @@ p_multicall(core::Download* download, const torrent::Object::list_type& args) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  torrent::Object             resultRaw = torrent::Object::create_list();
-  torrent::Object::list_type& result = resultRaw.as_list();
+  auto  resultRaw = torrent::Object::create_list();
+  auto& result    = resultRaw.as_list();
 
-  for (const auto& connection : *download->connection_list()) {
+  auto*      connection_list = download->connection_list();
+  const auto change_counter  = connection_list->change_counter();
+
+  rpc::preparsed_commands commands([&args](auto& cmds) {
+    for (auto cItr = ++args.begin(); cItr != args.end(); ++cItr)
+      cmds.push_back(rpc::parse_command_object(cItr->as_string()));
+  });
+
+  for (const auto& connection : *connection_list) {
     torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_const_iterator cItr = ++args.begin(); cItr != args.end(); cItr++) {
-      const std::string& cmd = cItr->as_string();
+    // Prepare only after a peer exists, preserving empty-list laziness.
+    commands.prepare_if_needed();
+    for (auto& itr : commands) {
+      row.push_back(rpc::call_object(itr, rpc::make_target(connection)));
 
-      row.push_back(rpc::parse_command(rpc::make_target(connection), cmd.c_str(), cmd.c_str() + cmd.size()).first);
+      // Erasing a peer frees it and swaps the last element into its place, so
+      // neither this peer nor the iteration survives a change to the list.
+      if (connection_list->change_counter() != change_counter)
+        throw torrent::input_error("Command changed the connection list during p.multicall.");
     }
   }
 
@@ -444,6 +452,9 @@ p_call_target(const torrent::Object::list_type& args) {
   core::Download* download = control->core()->download_list()->find_hex_ptr(itr++->as_string().c_str());
   const std::string& peer_id = itr++->as_string();
   const std::string& command_key = itr++->as_string();
+
+  if (download == nullptr)
+    throw torrent::input_error("invalid parameters: info-hash not found");
 
   torrent::HashString hash;
 
@@ -648,30 +659,50 @@ void               cg_d_group_set(core::Download* download, const torrent::Objec
 
 void
 initialize_command_download() {
-  CMD2_DL("d.hash",          [](auto* download, auto) { return torrent::utils::transform_to_hex_str(download->info()->hash()); });
-  CMD2_DL("d.local_id",      [](auto* download, auto) { return torrent::utils::transform_to_hex_str(download->info()->local_id()); });
-  CMD2_DL("d.local_id_html", [](auto* download, auto) { return torrent::utils::copy_escape_html_str(download->info()->local_id()); });
-  CMD2_DL("d.bitfield",      std::bind(&retrieve_d_bitfield, std::placeholders::_1));
-  CMD2_DL("d.base_path",     std::bind(&retrieve_d_base_path, std::placeholders::_1));
-  CMD2_DL("d.base_filename", std::bind(&retrieve_d_base_filename, std::placeholders::_1));
+  CMD2_DL("d.hash",                           [](auto* download, auto) { return torrent::utils::transform_to_hex_str(download->info()->hash()); });
+  CMD2_DL("d.local_id",                       [](auto* download, auto) { return torrent::utils::transform_to_hex_str(download->info()->local_id()); });
+  CMD2_DL("d.local_id_html",                  [](auto* download, auto) { return torrent::utils::copy_escape_html_str(download->info()->local_id()); });
+  CMD2_DL("d.bitfield",                       [](auto* download, auto) { return torrent::utils::transform_to_hex_str(*download->download()->file_list()->bitfield()); });
+  CMD2_DL("d.base_path",                      [](auto* download, auto) { return retrieve_d_base_path(download).str(); });
+  CMD2_DL("d.base_path.hex",                  [](auto* download, auto) { return retrieve_d_base_path(download).object_hex(); });
+  CMD2_DL("d.base_path.base64",               [](auto* download, auto) { return retrieve_d_base_path(download).object_base64(); });
+  CMD2_DL("d.base_path.base64_as_binary",     [](auto* download, auto) { return retrieve_d_base_path(download).object_base64_as_binary(); });
+  CMD2_DL("d.base_path.as_binary",            [](auto* download, auto) { return retrieve_d_base_path(download).object_as_binary(); });
+  CMD2_DL("d.base_path.or_base64",            [](auto* download, auto) { return retrieve_d_base_path(download).object_utf8_text_or_base64(); });
+  CMD2_DL("d.base_path.or_as_binary",         [](auto* download, auto) { return retrieve_d_base_path(download).object_utf8_text_or_as_binary(); });
+  CMD2_DL("d.base_path.realpath.or_empty",    [](auto* download, auto) { return resolve_path(retrieve_d_base_path(download).str()); });
+  CMD2_DL("d.base_path.realpath.or_throw",    [](auto* download, auto) { return resolve_path_or_throw(retrieve_d_base_path(download).str()); });
+  CMD2_DL("d.base_filename",                  [](auto* download, auto) { return retrieve_d_base_filename(download).str(); });
+  CMD2_DL("d.base_filename.hex",              [](auto* download, auto) { return retrieve_d_base_filename(download).object_hex(); });
+  CMD2_DL("d.base_filename.base64",           [](auto* download, auto) { return retrieve_d_base_filename(download).object_base64(); });
+  CMD2_DL("d.base_filename.base64_as_binary", [](auto* download, auto) { return retrieve_d_base_filename(download).object_base64_as_binary(); });
+  CMD2_DL("d.base_filename.as_binary",        [](auto* download, auto) { return retrieve_d_base_filename(download).object_as_binary(); });
+  CMD2_DL("d.base_filename.or_base64",        [](auto* download, auto) { return retrieve_d_base_filename(download).object_utf8_text_or_base64(); });
+  CMD2_DL("d.base_filename.or_as_binary",     [](auto* download, auto) { return retrieve_d_base_filename(download).object_utf8_text_or_as_binary(); });
 
-  CMD2_DL("d.name",          CMD2_ON_INFO(name));
-  CMD2_DL("d.creation_date", CMD2_ON_INFO(creation_date));
-  CMD2_DL("d.load_date",     CMD2_ON_INFO(load_date));
+  CMD2_DL("d.name",                           [](auto* download, auto) { return download->info()->name().str(); });
+  CMD2_DL("d.name.hex",                       [](auto* download, auto) { return download->info()->name().object_hex(); });
+  CMD2_DL("d.name.base64",                    [](auto* download, auto) { return download->info()->name().object_base64(); });
+  CMD2_DL("d.name.base64_as_binary",          [](auto* download, auto) { return download->info()->name().object_base64_as_binary(); });
+  CMD2_DL("d.name.as_binary",                 [](auto* download, auto) { return download->info()->name().object_as_binary(); });
+  CMD2_DL("d.name.or_base64",                 [](auto* download, auto) { return download->info()->name().object_utf8_text_or_base64(); });
+  CMD2_DL("d.name.or_as_binary",              [](auto* download, auto) { return download->info()->name().object_utf8_text_or_as_binary(); });
+  CMD2_DL("d.creation_date",                  [](auto* download, auto) { return download->info()->creation_date(); });
+  CMD2_DL("d.load_date",                      [](auto* download, auto) { return download->info()->load_date(); });
 
   //
   // Network related:
   //
 
-  CMD2_DL         ("d.up.rate",       std::bind(&torrent::Rate::rate,  CMD2_ON_INFO(up_rate)));
-  CMD2_DL         ("d.up.total",      std::bind(&torrent::Rate::total, CMD2_ON_INFO(up_rate)));
-  CMD2_DL         ("d.down.rate",     std::bind(&torrent::Rate::rate,  CMD2_ON_INFO(down_rate)));
-  CMD2_DL         ("d.down.total",    std::bind(&torrent::Rate::total, CMD2_ON_INFO(down_rate)));
-  CMD2_DL         ("d.skip.rate",     std::bind(&torrent::Rate::rate,  CMD2_ON_INFO(skip_rate)));
-  CMD2_DL         ("d.skip.total",    std::bind(&torrent::Rate::total, CMD2_ON_INFO(skip_rate)));
+  CMD2_DL         ("d.up.rate",           [](auto* download, auto) { return download->info()->up_rate()->rate(); });
+  CMD2_DL         ("d.up.total",          [](auto* download, auto) { return download->info()->up_rate()->total(); });
+  CMD2_DL         ("d.down.rate",         [](auto* download, auto) { return download->info()->down_rate()->rate(); });
+  CMD2_DL         ("d.down.total",        [](auto* download, auto) { return download->info()->down_rate()->total(); });
+  CMD2_DL         ("d.skip.rate",         [](auto* download, auto) { return download->info()->skip_rate()->rate(); });
+  CMD2_DL         ("d.skip.total",        [](auto* download, auto) { return download->info()->skip_rate()->total(); });
 
-  CMD2_DL         ("d.peer_exchange",     CMD2_ON_INFO(is_pex_enabled));
-  CMD2_DL_VALUE_V ("d.peer_exchange.set", std::bind(&torrent::Download::set_pex_enabled, CMD2_BIND_DL, std::placeholders::_2));
+  CMD2_DL         ("d.peer_exchange",     [](auto* download, auto)       { return download->info()->is_pex_enabled(); });
+  CMD2_DL_VALUE_V ("d.peer_exchange.set", [](auto* download, auto value) { download->download()->set_pex_enabled(value); });
 
   CMD2_DL_LIST    ("d.create_link", std::bind(&apply_d_change_link, std::placeholders::_1, std::placeholders::_2, 0));
   CMD2_DL_LIST    ("d.delete_link", std::bind(&apply_d_change_link, std::placeholders::_1, std::placeholders::_2, 1));
@@ -687,22 +718,22 @@ initialize_command_download() {
   // Control functinos:
   //
 
-  CMD2_DL         ("d.is_open",               CMD2_ON_INFO(is_open));
-  CMD2_DL         ("d.is_active",             CMD2_ON_INFO(is_active));
+  CMD2_DL         ("d.is_open",               [](auto* download, auto) { return download->info()->is_open(); });
+  CMD2_DL         ("d.is_active",             [](auto* download, auto) { return download->info()->is_active(); });
   CMD2_DL         ("d.is_hash_checked",       std::bind(&torrent::Download::is_hash_checked, CMD2_BIND_DL));
   CMD2_DL         ("d.is_hash_checking",      std::bind(&torrent::Download::is_hash_checking, CMD2_BIND_DL));
   CMD2_DL         ("d.is_multi_file",         std::bind(&torrent::FileList::is_multi_file, CMD2_BIND_FL));
-  CMD2_DL         ("d.is_private",            CMD2_ON_INFO(is_private));
-  CMD2_DL         ("d.is_pex_active",         CMD2_ON_INFO(is_pex_active));
+  CMD2_DL         ("d.is_private",            [](auto* download, auto) { return download->info()->is_private(); });
+  CMD2_DL         ("d.is_pex_active",         [](auto* download, auto) { return download->info()->is_pex_active(); });
   CMD2_DL         ("d.is_partially_done",     CMD2_ON_DATA(is_partially_done));
   CMD2_DL         ("d.is_not_partially_done", CMD2_ON_DATA(is_not_partially_done));
-  CMD2_DL         ("d.is_meta",               CMD2_ON_INFO(is_meta_download));
+  CMD2_DL         ("d.is_meta",               [](auto* download, auto) { return download->info()->is_meta_download(); });
 
   CMD2_DL_V       ("d.resume",     std::bind(&core::DownloadList::resume_default, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.pause",      std::bind(&core::DownloadList::pause_default, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.open",       std::bind(&core::DownloadList::open_throw, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.close",      std::bind(&core::DownloadList::close_throw, control->core()->download_list(), std::placeholders::_1));
-  CMD2_DL_V       ("d.close.directly", std::bind(&core::DownloadList::close_directly, control->core()->download_list(), std::placeholders::_1));
+  CMD2_DL_V       ("d.close.directly", std::bind(&core::DownloadList::close_files, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.erase",      std::bind(&core::DownloadList::erase_ptr, control->core()->download_list(), std::placeholders::_1));
   CMD2_DL_V       ("d.check_hash", std::bind(&core::DownloadList::check_hash, control->core()->download_list(), std::placeholders::_1));
 
@@ -757,6 +788,11 @@ initialize_command_download() {
   CMD2_DL_VAR_STRING_PUBLIC("d.tied_to_file", "rtorrent", "tied_to_file");
   CMD2_DL_VAR_STRING("d.loaded_file",  "rtorrent", "loaded_file");
 
+  CMD2_DL("d.tied_to_file.realpath.or_empty", [](auto* download, auto) { return resolve_path(rpc::convert_to_string(download_get_variable(download, "rtorrent", "tied_to_file"))); });
+  CMD2_DL("d.tied_to_file.realpath.or_throw", [](auto* download, auto) { return resolve_path_or_throw(rpc::convert_to_string(download_get_variable(download, "rtorrent", "tied_to_file"))); });
+  CMD2_DL("d.loaded_file.realpath.or_empty",  [](auto* download, auto) { return resolve_path(rpc::convert_to_string(download_get_variable(download, "rtorrent", "loaded_file"))); });
+  CMD2_DL("d.loaded_file.realpath.or_throw",  [](auto* download, auto) { return resolve_path_or_throw(rpc::convert_to_string(download_get_variable(download, "rtorrent", "loaded_file"))); });
+
   // The "state_changed" variable is required to be a valid unix time
   // value, it indicates the last time the torrent changed its state,
   // resume/pause.
@@ -767,15 +803,15 @@ initialize_command_download() {
   CMD2_DL_TIMESTAMP("d.timestamp.started",      "rtorrent", "timestamp.started");
   CMD2_DL_TIMESTAMP("d.timestamp.finished",     "rtorrent", "timestamp.finished");
 
-  CMD2_DL       ("d.connection_current",     std::bind(&torrent::option_as_string, torrent::OPTION_CONNECTION_TYPE, CMD2_ON_DL(connection_type)));
-  CMD2_DL_STRING("d.connection_current.set", std::bind(&apply_d_connection_type, std::placeholders::_1, std::placeholders::_2));
+  CMD2_DL         ("d.connection_current",     [](auto* d, auto)     { return torrent::option_to_c_str_or_throw(torrent::OPTION_CONNECTION_TYPE, d->download()->connection_type()); });
+  CMD2_DL_STRING_V("d.connection_current.set", [](auto* d, auto arg) { apply_d_connection_type(d, arg); });
 
   CMD2_DL_VAR_STRING("d.connection_leech",      "rtorrent", "connection_leech");
   CMD2_DL_VAR_STRING("d.connection_seed",       "rtorrent", "connection_seed");
 
-  CMD2_DL       ("d.up.choke_heuristics",       std::bind(&torrent::option_as_string, torrent::OPTION_CHOKE_HEURISTICS, CMD2_ON_DL(upload_choke_heuristic)));
+  CMD2_DL       ("d.up.choke_heuristics",       [](auto* d, auto)     { return torrent::option_to_c_str_or_throw(torrent::OPTION_CHOKE_HEURISTICS, d->download()->upload_choke_heuristic()); });
   CMD2_DL_STRING("d.up.choke_heuristics.set",   std::bind(&apply_d_choke_heuristics, std::placeholders::_1, std::placeholders::_2, false));
-  CMD2_DL       ("d.down.choke_heuristics",     std::bind(&torrent::option_as_string, torrent::OPTION_CHOKE_HEURISTICS, CMD2_ON_DL(download_choke_heuristic)));
+  CMD2_DL       ("d.down.choke_heuristics",     [](auto* d, auto)     { return torrent::option_to_c_str_or_throw(torrent::OPTION_CHOKE_HEURISTICS, d->download()->download_choke_heuristic()); });
   CMD2_DL_STRING("d.down.choke_heuristics.set", std::bind(&apply_d_choke_heuristics, std::placeholders::_1, std::placeholders::_2, true));
 
   CMD2_DL_VAR_STRING("d.up.choke_heuristics.leech", "rtorrent", "choke_heuristics.up.leech");
@@ -830,7 +866,7 @@ initialize_command_download() {
   CMD2_DL         ("d.bytes_done",     CMD2_ON_DL(bytes_done));
   CMD2_DL         ("d.ratio",          std::bind(&retrieve_d_ratio, std::placeholders::_1));
   CMD2_DL         ("d.chunks_hashed",  CMD2_ON_DL(chunks_hashed));
-  CMD2_DL         ("d.free_diskspace", CMD2_ON_FL(free_diskspace));
+  CMD2_DL         ("d.free_diskspace", [](auto* download, auto) { return download->file_list()->free_diskspace_no_cache(); });
 
   CMD2_DL         ("d.size_files",     CMD2_ON_FL(size_files));
   CMD2_DL         ("d.size_bytes",     CMD2_ON_FL(size_bytes));
@@ -863,10 +899,11 @@ initialize_command_download() {
   CMD2_DL_LIST    ("d.tracker.insert",                std::bind(&download_tracker_insert, std::placeholders::_1, std::placeholders::_2));
   CMD2_DL_VALUE_V ("d.tracker.send_scrape",           [](auto download, uint64_t arg) { download->tracker_controller().scrape_request(arg); });
 
-  CMD2_DL         ("d.directory",          CMD2_ON_FL(root_dir));
-  CMD2_DL_STRING_V("d.directory.set",      std::bind(&apply_d_directory, std::placeholders::_1, std::placeholders::_2));
-  CMD2_DL         ("d.directory_base",     CMD2_ON_FL(root_dir));
-  CMD2_DL_STRING_V("d.directory_base.set", std::bind(&core::Download::set_root_directory, std::placeholders::_1, std::placeholders::_2));
+  CMD2_DL         ("d.directory",                   CMD2_ON_FL(root_dir));
+  CMD2_DL         ("d.directory.realpath.or_empty", [](auto* download, auto)     { return resolve_path(download->file_list()->root_dir()); });
+  CMD2_DL         ("d.directory.realpath.or_throw", [](auto* download, auto)     { return resolve_path_or_throw(download->file_list()->root_dir()); });
+  CMD2_DL_STRING_V("d.directory.set",               [](auto* download, auto arg) { download->set_directory(arg); });
+  CMD2_DL_STRING_V("d.directory.base.set",          [](auto* download, auto arg) { download->set_base_directory(arg); });
 
   CMD2_DL         ("d.priority",     std::bind(&core::Download::priority, std::placeholders::_1));
   CMD2_DL         ("d.priority_str", std::bind(&retrieve_d_priority_str, std::placeholders::_1));
@@ -898,10 +935,35 @@ initialize_command_download() {
   rpc::rpc.mark_safe("d.local_id_html");
   rpc::rpc.mark_safe("d.bitfield");
   rpc::rpc.mark_safe("d.base_path");
+  rpc::rpc.mark_safe("d.base_path.realpath.or_empty");
+  rpc::rpc.mark_safe("d.base_path.realpath.or_throw");
+  rpc::rpc.mark_safe("d.directory.realpath.or_empty");
+  rpc::rpc.mark_safe("d.directory.realpath.or_throw");
+  rpc::rpc.mark_safe("d.tied_to_file.realpath.or_empty");
+  rpc::rpc.mark_safe("d.tied_to_file.realpath.or_throw");
+  rpc::rpc.mark_safe("d.loaded_file.realpath.or_empty");
+  rpc::rpc.mark_safe("d.loaded_file.realpath.or_throw");
+  rpc::rpc.mark_safe("d.base_path.hex");
+  rpc::rpc.mark_safe("d.base_path.base64");
+  rpc::rpc.mark_safe("d.base_path.base64_as_binary");
+  rpc::rpc.mark_safe("d.base_path.as_binary");
+  rpc::rpc.mark_safe("d.base_path.or_base64");
+  rpc::rpc.mark_safe("d.base_path.or_as_binary");
   rpc::rpc.mark_safe("d.base_filename");
+  rpc::rpc.mark_safe("d.base_filename.hex");
+  rpc::rpc.mark_safe("d.base_filename.base64");
+  rpc::rpc.mark_safe("d.base_filename.base64_as_binary");
+  rpc::rpc.mark_safe("d.base_filename.as_binary");
+  rpc::rpc.mark_safe("d.base_filename.or_base64");
+  rpc::rpc.mark_safe("d.base_filename.or_as_binary");
   rpc::rpc.mark_safe("d.name");
+  rpc::rpc.mark_safe("d.name.hex");
+  rpc::rpc.mark_safe("d.name.base64");
+  rpc::rpc.mark_safe("d.name.base64_as_binary");
+  rpc::rpc.mark_safe("d.name.as_binary");
+  rpc::rpc.mark_safe("d.name.or_base64");
+  rpc::rpc.mark_safe("d.name.or_as_binary");
   rpc::rpc.mark_safe("d.directory");
-  rpc::rpc.mark_safe("d.directory_base");
   rpc::rpc.mark_safe("d.creation_date");
   rpc::rpc.mark_safe("d.load_date");
   rpc::rpc.mark_safe("d.up.rate");
@@ -941,6 +1003,9 @@ initialize_command_download() {
   rpc::rpc.mark_safe("d.size_chunks");
   rpc::rpc.mark_safe("d.size_pex");
   rpc::rpc.mark_safe("d.completed_bytes");
+  rpc::rpc.mark_safe("d.complete");
+  rpc::rpc.mark_safe("d.timestamp.started");
+  rpc::rpc.mark_safe("d.timestamp.finished");
   rpc::rpc.mark_safe("d.bytes_done");
   rpc::rpc.mark_safe("d.peers_accounted");
   rpc::rpc.mark_safe("d.chunks_hashed");

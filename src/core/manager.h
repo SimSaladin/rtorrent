@@ -5,11 +5,9 @@
 #include <memory>
 #include <vector>
 #include <torrent/utils/log_buffer.h>
-#include <torrent/connection_manager.h>
 #include <torrent/object.h>
 
 #include "download_list.h"
-#include "range_map.h"
 
 namespace torrent {
   class Bencode;
@@ -23,7 +21,8 @@ namespace core {
 
 class HttpQueue;
 
-typedef std::map<std::string, torrent::ThrottlePair> ThrottleMap;
+using ThrottlePair = std::pair<torrent::Throttle*, torrent::Throttle*>;
+using ThrottleMap  =  std::map<std::string, ThrottlePair>;
 
 class View;
 
@@ -35,31 +34,25 @@ public:
   Manager();
   ~Manager();
 
-  DownloadList*       download_list()                     { return m_download_list.get(); }
-  FileStatusCache*    file_status_cache()                 { return m_file_status_cache.get(); }
+  bool                is_download_shutdown_completed();
 
-  HttpQueue*          http_queue()                        { return m_http_queue.get(); }
+  DownloadList*       download_list()                   { return m_download_list.get(); }
+  FileStatusCache*    file_status_cache()               { return m_file_status_cache.get(); }
 
-  View*               hashing_view()                      { return m_hashingView; }
+  HttpQueue*          http_queue()                      { return m_http_queue.get(); }
+
+  View*               hashing_view()                    { return m_hashingView; }
   void                set_hashing_view(View* v);
 
-  torrent::log_buffer* log_important()                    { return m_log_important.get(); }
-  torrent::log_buffer* log_complete()                     { return m_log_complete.get(); }
+  auto*               log_important()                   { return m_log_important.get(); }
+  auto*               log_complete()                    { return m_log_complete.get(); }
 
-  ThrottleMap&          throttles()                       { return m_throttles; }
-  torrent::ThrottlePair get_throttle(const std::string& name);
+  ThrottleMap&        throttles()                       { return m_throttles; }
+  ThrottlePair        get_throttle(const std::string& name);
 
   int64_t             retrieve_throttle_value(const torrent::Object::string_type& name, bool rate, bool up);
 
-  // Use custom throttle for the given range of IP addresses.
-  void                  set_address_throttle(uint32_t begin, uint32_t end, torrent::ThrottlePair throttles);
-  torrent::ThrottlePair get_address_throttle(const sockaddr* addr);
-
   void                cleanup();
-
-  void                listen_open();
-
-  void                set_proxy_address(const std::string& addr);
 
   const std::string&  magnet_path();
   void                set_magnet_path(const std::string& path);
@@ -82,11 +75,9 @@ public:
   // Temporary, find a better place for this.
   void                try_create_download(const std::string& uri, int flags, const command_list_type& commands);
   void                try_create_download_expand(const std::string& uri, int flags, command_list_type commands = command_list_type());
-  void                try_create_download_from_meta_download(torrent::Object* bencode, const std::string& metafile);
+  void                try_create_download_from_meta_download(std::unique_ptr<torrent::Object> bencode, const std::string& metafile);
 
 private:
-  typedef RangeMap<uint32_t, torrent::ThrottlePair> AddressThrottleMap;
-
   void                create_http(const std::string& uri);
   void                create_final(std::istream* s);
 
@@ -102,7 +93,6 @@ private:
   View*               m_hashingView{};
 
   ThrottleMap         m_throttles;
-  AddressThrottleMap  m_addressThrottles;
 
   torrent::log_buffer_ptr m_log_important;
   torrent::log_buffer_ptr m_log_complete;

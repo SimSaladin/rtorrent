@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <string.h>
 #include <torrent/throttle.h>
 #include <torrent/torrent.h>
@@ -354,8 +355,9 @@ Root::reset_input_history_attributes(ui::DownloadList::Input type) {
 
 void
 Root::set_input_history_size(int size) {
-  if (size < 1)
-    throw torrent::input_error("Invalid input history size.");
+  if (size < 1 || size > max_input_history_size)
+    throw torrent::input_error("Input history size must be between 1 and " +
+                               std::to_string(max_input_history_size) + ".");
 
   for (auto& [entry, category] : m_input_history) {
     // Reserve the latest input history entries if new size is smaller than original.
@@ -378,7 +380,7 @@ Root::set_input_history_size(int size) {
 void
 Root::load_input_history() {
   if (m_control == nullptr || !session_thread::manager()->is_used()) {
-    lt_log_print(torrent::LOG_DEBUG, "ignoring input history file");
+    lt_log_print(torrent::LOG_DEBUG_TRACE, "ignoring input history file");
     return;
   }
 
@@ -413,10 +415,10 @@ Root::load_input_history() {
     }
 
     if (history_file.bad()) {
-      lt_log_print(torrent::LOG_DEBUG, "input history file corrupted, discarding (path:%s)", history_filename.c_str());
+      lt_log_print(torrent::LOG_DEBUG_TRACE, "input history file corrupted, discarding (path:%s)", history_filename.c_str());
       return;
     } else {
-      lt_log_print(torrent::LOG_DEBUG, "input history file read (path:%s)", history_filename.c_str());
+      lt_log_print(torrent::LOG_DEBUG_TRACE, "input history file read (path:%s)", history_filename.c_str());
     }
 
     for (const auto& [entry, category] : input_history_tmp) {
@@ -439,7 +441,7 @@ Root::load_input_history() {
       }
     }
   } else {
-    lt_log_print(torrent::LOG_DEBUG, "could not open input history file (path:%s)", history_filename.c_str());
+    lt_log_print(torrent::LOG_DEBUG_TRACE, "could not open input history file (path:%s)", history_filename.c_str());
   }
 }
 
@@ -453,7 +455,7 @@ Root::save_input_history() {
   auto history_file         = std::fstream(history_filename_tmp.c_str(), std::ios::out | std::ios::trunc);
 
   if (!history_file.is_open()) {
-    lt_log_print(torrent::LOG_DEBUG, "could not open input history file for writing (path:%s)", history_filename.c_str());
+    lt_log_print(torrent::LOG_DEBUG_TRACE, "could not open input history file for writing (path:%s)", history_filename.c_str());
     return;
   }
 
@@ -465,14 +467,15 @@ Root::save_input_history() {
         history_file << entry << "|" + category.at((pitr->second + i) % m_input_history_length) + "\n";
   }
 
+  // The data only reaches the kernel here, so this is where a full disk is seen.
+  history_file.close();
+
   if (!history_file.good()) {
-    lt_log_print(torrent::LOG_DEBUG, "input history file corrupted during writing, discarding (path:%s)", history_filename.c_str());
+    lt_log_print(torrent::LOG_DEBUG_TRACE, "input history file corrupted during writing, discarding (path:%s)", history_filename.c_str());
     return;
   } else {
-    lt_log_print(torrent::LOG_DEBUG, "input history file written (path:%s)", history_filename.c_str());
+    lt_log_print(torrent::LOG_DEBUG_TRACE, "input history file written (path:%s)", history_filename.c_str());
   }
-
-  history_file.close();
 
   std::rename(history_filename_tmp.c_str(), history_filename.c_str());
 }

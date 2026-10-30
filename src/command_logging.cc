@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <fcntl.h>
+#include <iterator>
 #include <stdio.h>
 #include <unistd.h>
 #include <torrent/data/chunk_utils.h>
@@ -8,53 +9,24 @@
 #include <torrent/utils/log.h>
 #include <torrent/utils/option_strings.h>
 
-#include "globals.h"
 #include "control.h"
 #include "command_helpers.h"
+#include "globals.h"
+#include "setup.h"
 #include "core/download.h"
 #include "core/download_list.h"
 #include "core/manager.h"
+#include "rpc/parse.h"
 #include "rpc/parse_commands.h"
 
-static const int log_flag_use_gz = 0x1;
-static const int log_flag_append_pid = 0x2;
-static const int log_flag_append_file = 0x4;
-static const int log_flag_flush = 0x8;
-
-void
-log_add_group_output_str(const char* group_name, const char* output_id) {
-  int log_group = torrent::option_find_string(torrent::OPTION_LOG_GROUP, group_name);
-  torrent::log_add_group_output(log_group, output_id);
-}
-
 torrent::Object
-apply_log_open(int output_flags, const torrent::Object::list_type& args) {
-  if (args.size() < 2)
-    throw torrent::input_error("Invalid number of arguments.");
+apply_log_open(int output_flags, const torrent::Object::list_type& raw_args) {
+  std::vector<std::string> args;
 
-  torrent::Object::list_const_iterator itr = args.begin();
+  for (const auto& arg : raw_args)
+    args.push_back(arg.as_string());
 
-  auto output_id = (itr++)->as_string();
-  auto file_name = expand_path((itr++)->as_string());
-
-  if ((output_flags & log_flag_append_pid)) {
-    char buffer[32];
-    snprintf(buffer, 32, ".%li", (long)getpid());
-
-    file_name += buffer;
-  }
-
-  bool append = (output_flags & log_flag_append_file);
-  bool flush = (output_flags & log_flag_flush);
-
-  if ((output_flags & log_flag_use_gz))
-    torrent::log_open_gz_file_output(output_id.c_str(), file_name.c_str(), append);
-  else
-    torrent::log_open_file_output(output_id.c_str(), file_name.c_str(), append, flush);
-
-  while (itr != args.end())
-    log_add_group_output_str((itr++)->as_string().c_str(), output_id.c_str());
-
+  apply_log_open_str(output_flags, args);
   return torrent::Object();
 }
 
@@ -63,9 +35,34 @@ apply_log_add_output(const torrent::Object::list_type& args) {
   if (args.size() != 2)
     throw torrent::input_error("Invalid number of arguments.");
 
-  log_add_group_output_str(args.front().as_string().c_str(),
-                           args.back().as_string().c_str());
+  log_add_group_output_str(args.front().as_string(), args.back().as_string());
 
+  return torrent::Object();
+}
+
+torrent::Object
+apply_log_print(const torrent::Object::list_type& args) {
+  if (args.size() < 2)
+    throw torrent::input_error("Invalid number of arguments.");
+
+  torrent::Object::value_type group;
+
+  if (args.front().is_value())
+    group = args.front().as_value();
+  else if (args.front().is_string())
+    group = torrent::option_find_string_str(torrent::OPTION_LOG_GROUP, args.front().as_string());
+  else
+    throw torrent::input_error("Invalid log group.");
+
+  if (group < 0 || group >= torrent::LOG_GROUP_MAX_SIZE)
+    throw torrent::input_error("Invalid log group.");
+
+  std::string message;
+
+  for (auto itr = std::next(args.begin()); itr != args.end(); ++itr)
+    rpc::print_object_std(&message, &*itr, 0);
+
+  torrent::log_groups[group].internal_print(message);
   return torrent::Object();
 }
 
@@ -125,7 +122,10 @@ log_vmmap_dump(const std::string& str) {
     fprintf(log_file, "%8p-%8p [%5llxk]\n", all_mapping.ptr, (char*)all_mapping.ptr + all_mapping.length, (long long unsigned int)(all_mapping.length / 1024));
   }
 
-  fclose(log_file);
+  // The buffered output only reaches the kernel here.
+  if (fclose(log_file) != 0)
+    throw torrent::input_error("Could not write log file: " + str);
+
   return torrent::Object();
 }
 
@@ -138,11 +138,12 @@ initialize_command_logging() {
   CMD2_ANY_LIST    ("log.open_gz_file_pid",   std::bind(&apply_log_open, log_flag_append_pid | log_flag_use_gz, std::placeholders::_2));
   CMD2_ANY_LIST    ("log.append_file",        std::bind(&apply_log_open, log_flag_append_file, std::placeholders::_2));
   CMD2_ANY_LIST    ("log.append_file.flush",  std::bind(&apply_log_open, log_flag_append_file | log_flag_flush, std::placeholders::_2));
-  CMD2_ANY_LIST    ("log.append_gz_file",     std::bind(&apply_log_open, log_flag_append_file, std::placeholders::_2));
+  CMD2_ANY_LIST    ("log.append_gz_file",     std::bind(&apply_log_open, log_flag_append_file | log_flag_use_gz, std::placeholders::_2));
 
   CMD2_ANY_STRING_V("log.close",            std::bind(&torrent::log_close_output_str, std::placeholders::_2));
 
   CMD2_ANY_LIST    ("log.add_output",       std::bind(&apply_log_add_output, std::placeholders::_2));
+  CMD2_ANY_LIST    ("log.print",            std::bind(&apply_log_print, std::placeholders::_2));
 
   CMD2_ANY_STRING  ("log.execute",          std::bind(&apply_log, std::placeholders::_2, 0));
   CMD2_ANY_STRING  ("log.vmmap.dump",       std::bind(&log_vmmap_dump, std::placeholders::_2));

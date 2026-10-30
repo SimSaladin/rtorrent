@@ -2,16 +2,20 @@
 
 #include "rpc/jsonrpc.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <torrent/common.h>
 #include <torrent/torrent.h>
+#include <torrent/utils/string_manip.h>
 
 #include "rpc/rpc_manager.h"
 #include "rpc/command.h"
 #include "rpc/command_map.h"
 #include "rpc/nlohmann/json.h"
 #include "rpc/parse_commands.h"
+#include "rpc/scgi_task.h"
 #include "torrent/exceptions.h"
 #include "torrent/object.h"
 #include "utils/functional.h"
@@ -25,32 +29,45 @@ constexpr int JSONRPC_METHOD_NOT_FOUND_ERROR = -32601;
 constexpr int JSONRPC_INVALID_PARAMS_ERROR   = -32602;
 constexpr int JSONRPC_INTERNAL_ERROR         = -32000;
 
+constexpr uint32_t max_json_depth = 1024;
+
 using json = nlohmann::json;
 
 torrent::Object
-json_to_object(const json& value) {
+json_to_object(const json& value, uint32_t depth = 0) {
   switch (value.type()) {
   case json::value_t::number_unsigned:
   case json::value_t::number_integer:
     return torrent::Object(value.get<int64_t>());
+
   case json::value_t::boolean:
     return value.get<bool>() ? torrent::Object(int64_t(1)) : torrent::Object(int64_t(0));
+
   case json::value_t::string:
     return torrent::Object(value.get<std::string>());
+
   case json::value_t::array: {
+    if (++depth >= max_json_depth)
+      throw torrent::input_error("invalid parameters: max depth reached");
+
     auto  array_raw = torrent::Object::create_list();
     auto& array     = array_raw.as_list();
-    for (const auto& entry : value) {
-      array.push_back(json_to_object(entry));
-    }
+
+    for (const auto& entry : value)
+      array.push_back(json_to_object(entry, depth));
+
     return array_raw;
   }
   case json::value_t::object: {
+    if (++depth >= max_json_depth)
+      throw torrent::input_error("invalid parameters: max depth reached");
+
     auto  map_raw = torrent::Object::create_map();
     auto& map     = map_raw.as_map();
-    for (const auto& entry : value.items()) {
-      map[entry.key()] = json_to_object(entry.value());
-    }
+
+    for (const auto& entry : value.items())
+      map[entry.key()] = json_to_object(entry.value(), depth);
+
     return map_raw;
   }
   case json::value_t::number_float:
@@ -61,17 +78,38 @@ json_to_object(const json& value) {
   }
 }
 
+// Note: Only throw rpc_errors here.
+
 json
-object_to_json(const torrent::Object& object) noexcept {
+object_to_json(const torrent::Object& object) {
   switch (object.type()) {
   case torrent::Object::TYPE_VALUE:
     return object.as_value();
+
   case torrent::Object::TYPE_STRING:
+    if (object.flags() & torrent::Object::flag_as_binary) {
+
+      // We should optimize our imported json library to support copying base64 strings directly.
+      if (object.flags() & torrent::Object::flag_base64) {
+        auto binary_data = torrent::utils::transform_from_base64_unsafe(object.as_string());
+
+        if (!binary_data.has_value())
+          throw rpc_error(JSONRPC_INTERNAL_ERROR, "invalid base64 string in base64-as-binary object");
+
+        return json::binary(*binary_data);
+      }
+
+      return json::binary({object.as_string().begin(), object.as_string().end()});
+    }
+
     return object.as_string();
+
   case torrent::Object::TYPE_LIST: {
     json result = json::array();
+
     for (const auto& obj : object.as_list())
       result.push_back(object_to_json(obj));
+
     return result;
   }
   case torrent::Object::TYPE_MAP: {
@@ -111,7 +149,7 @@ jsonrpc_call_command(const std::string& method, const json& params) {
 
   CommandMap::iterator itr = commands.find(method.c_str());
 
-  if (itr == commands.end()) {
+  if (itr == commands.end() || !(itr->second.m_flags & CommandMap::flag_public_rpc)) {
     throw rpc_error(JSONRPC_METHOD_NOT_FOUND_ERROR, "method not found: " + method);
   }
 
@@ -135,7 +173,9 @@ jsonrpc_call_command(const std::string& method, const json& params) {
 
   try {
     const auto& result = rpc::commands.call_command(itr, params_object, target);
+
     return object_to_json(result);
+
   } catch (untrusted_error& e) {
     throw rpc_error(JSONRPC_METHOD_NOT_FOUND_ERROR, e.what());
   }
@@ -185,13 +225,49 @@ handle_notification(const json& request) noexcept {
   }
 }
 
+namespace {
+
+using json_input_adapter = decltype(nlohmann::detail::input_adapter(std::declval<const char*>(), std::declval<const char*>()));
+using json_dom_parser    = nlohmann::detail::json_sax_dom_parser<json, json_input_adapter>;
+
+class json_depth_limited_parser : public json_dom_parser {
+public:
+  explicit json_depth_limited_parser(json& root) : json_dom_parser(root) {}
+
+  bool start_object(std::size_t length) { return enter() && json_dom_parser::start_object(length); }
+  bool start_array(std::size_t length) { return enter() && json_dom_parser::start_array(length); }
+
+  bool end_object() { m_depth--; return json_dom_parser::end_object(); }
+  bool end_array() { m_depth--; return json_dom_parser::end_array(); }
+
+private:
+  bool enter() { return ++m_depth <= max_json_depth; }
+
+  uint32_t m_depth{0};
+};
+
+} // namespace
+
 bool
 JsonRpc::process(const char* in_buffer, uint32_t length, slot_write callback) {
   json response;
   json body;
 
+  if (length > m_size_limit) {
+    auto err_str = json_error(JSONRPC_INVALID_REQUEST_ERROR, "content size exceeds maximum RPC limit", nullptr).dump();
+
+    return callback(err_str.c_str(), err_str.size());
+  }
+
   try {
-    body = json::parse(in_buffer, in_buffer + length);
+    json_depth_limited_parser handler(body);
+
+    if (!json::sax_parse(in_buffer, in_buffer + length, &handler)) {
+      auto err_str = json_error(JSONRPC_INVALID_REQUEST_ERROR, "maximum nesting depth exceeded", nullptr).dump();
+
+      return callback(err_str.c_str(), err_str.size());
+    }
+
     switch (body.type()) {
     case json::value_t::object: {
       if (!body.contains("id")) {
@@ -227,13 +303,17 @@ JsonRpc::process(const char* in_buffer, uint32_t length, slot_write callback) {
 
     std::string response_str = response.dump();
 
+    if (response_str.size() > SCgiTask::max_response_size) {
+      const auto& id = response.is_object() && response.contains("id") ? response["id"] : json(nullptr);
+      auto err_str = json_error(JSONRPC_INTERNAL_ERROR, "response size exceeds maximum RPC limit", id).dump();
+
+      return callback(err_str.c_str(), err_str.size());
+    }
+
     return callback(response_str.c_str(), response_str.size());
 
-  } catch (json::parse_error& e) {
-    auto err_str = json_error(JSONRPC_PARSE_ERROR, e.what(), nullptr).dump(-1, ' ', false, json::error_handler_t::replace);
-    return callback(err_str.c_str(), err_str.size());
-  } catch (json::type_error& e) {
-    // Type errors may be caused by invalid UTF-8 strings in exception strings, hence the ::replace
+  } catch (json::exception& e) {
+    // Exception strings may contain invalid UTF-8, hence the ::replace
     auto err_str = json_error(JSONRPC_PARSE_ERROR, e.what(), nullptr).dump(-1, ' ', false, json::error_handler_t::replace);
     return callback(err_str.c_str(), err_str.size());
   }

@@ -17,7 +17,6 @@ libsub_root_a_SOURCES = \
 	core/http_queue.h \
 	core/manager.cc \
 	core/manager.h \
-	core/range_map.h \
 	core/view.cc \
 	core/view.h \
 	core/view_manager.cc \
@@ -172,9 +171,12 @@ libsub_root_a_SOURCES = \
 	utils/functional.h \
 	utils/gzip.cc \
 	utils/gzip.h \
-	utils/list_focus.h \
 	utils/lockfile.cc \
 	utils/lockfile.h \
+	utils/waitpid_queue.cc \
+	utils/waitpid_queue.h \
+	utils/watch_ready_queue.cc \
+	utils/watch_ready_queue.h \
 	\
 	command_download.cc \
 	command_dynamic.cc \
@@ -191,6 +193,8 @@ libsub_root_a_SOURCES = \
 	command_throttle.cc \
 	command_tracker.cc \
 	command_scheduler.cc \
+	command_string.cc \
+	command_system.cc \
 	command_ui.cc \
 	command_pyroscope.cc \
 	control.cc \
@@ -199,8 +203,14 @@ libsub_root_a_SOURCES = \
 	globals.h \
 	option_parser.cc \
 	option_parser.h \
+	setup.cc \
+	setup.h \
 	signal_handler.cc \
 	signal_handler.h
 
+
+if NO_NCURSES
+libsub_root_a_SOURCES += display/curses_stub.cc display/curses_stub.h
+endif
 
 AM_CPPFLAGS = -I$(srcdir) -I$(top_srcdir) -DPACKAGE_DATADIR=\"$(pkgdatadir)\"

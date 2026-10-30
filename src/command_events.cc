@@ -2,6 +2,8 @@
 
 #include <functional>
 #include <cstdio>
+#include <string>
+#include <vector>
 #include <torrent/rate.h>
 #include <torrent/hash_string.h>
 #include <torrent/utils/log.h>
@@ -19,6 +21,7 @@
 #include "rpc/command_scheduler.h"
 #include "rpc/parse.h"
 #include "rpc/parse_commands.h"
+#include "utils/watch_ready_queue.h"
 
 torrent::Object
 apply_on_ratio(const torrent::Object& rawArgs) {
@@ -38,7 +41,7 @@ apply_on_ratio(const torrent::Object& rawArgs) {
   std::vector<core::Download*> downloads;
 
   for  (auto itr = (*view_itr)->begin_visible(), last = (*view_itr)->end_visible(); itr != last; itr++) {
-    if (!(*itr)->is_seeding() || rpc::call_command_value("d.ignore_commands", rpc::make_target(*itr)) != 0)
+    if (*itr == nullptr || !(*itr)->is_seeding() || rpc::call_command_value("d.ignore_commands", rpc::make_target(*itr)) != 0)
       continue;
 
     int64_t total_done   = (*itr)->download()->bytes_done();
@@ -48,7 +51,7 @@ apply_on_ratio(const torrent::Object& rawArgs) {
         !(max_ratio > 0 && total_upload * 100 > total_done * max_ratio))
       continue;
 
-    downloads.push_back(*itr);
+    downloads.push_back(itr->get());
   }
 
   auto ratio_command = "group." + group_name + ".ratio.command";
@@ -125,7 +128,7 @@ apply_remove_untied() {
 }
 
 torrent::Object
-apply_schedule(const torrent::Object::list_type& args) {
+apply_schedule(const torrent::Object::list_type& args, bool if_absent) {
   if (args.size() != 4)
     throw torrent::input_error("Wrong number of arguments.");
 
@@ -134,6 +137,9 @@ apply_schedule(const torrent::Object::list_type& args) {
   auto& arg1 = (itr++)->as_string();
   auto& arg2 = (itr++)->as_string();
   auto& arg3 = (itr++)->as_string();
+
+  if (if_absent && control->command_scheduler()->find(arg1) != control->command_scheduler()->end())
+    return torrent::Object();
 
   control->command_scheduler()->parse(arg1, arg2, arg3, *itr);
 
@@ -163,14 +169,16 @@ void apply_try_import(const std::string& path) { if (!rpc::parse_command_file(pa
 
 torrent::Object
 apply_close_low_diskspace(int64_t arg, uint32_t skip_priority) {
-  bool closed = false;
+  int closed{};
 
-  for (auto download : *control->core()->download_list()) {
+  torrent::FileList::cache_list cache;
+
+  for (const auto& download : *control->core()->download_list()) {
     if (!download->is_downloading())
       continue;
     if (download->priority() >= skip_priority)
       continue;
-    if (download->file_list()->free_diskspace() >= (uint64_t)arg)
+    if (download->file_list()->free_diskspace(cache) >= (uint64_t)arg)
       continue;
 
     control->core()->download_list()->close(download);
@@ -178,11 +186,11 @@ apply_close_low_diskspace(int64_t arg, uint32_t skip_priority) {
     download->set_hash_failed(true);
     download->set_message(std::string("Low diskspace."));
 
-    closed = true;
+    closed++;
   }
 
-  if (closed)
-    lt_log_print(torrent::LOG_TORRENT_ERROR, "Closed torrents due to low diskspace.");
+  if (closed != 0)
+    lt_log_print(torrent::LOG_TORRENT_EVENTS, "closed torrents due to low diskspace : count:%i", closed);
 
   return torrent::Object();
 }
@@ -206,6 +214,9 @@ apply_download_list(const torrent::Object::list_type& args) {
   torrent::Object::list_type& resultList = result.as_list();
 
   for (core::View::const_iterator itr = (*view_itr)->begin_visible(), last = (*view_itr)->end_visible(); itr != last; itr++) {
+    if (*itr == nullptr)
+      continue;
+
     const torrent::HashString* hashString = &(*itr)->info()->hash();
 
     resultList.push_back(torrent::utils::transform_to_hex_str(*hashString));
@@ -232,17 +243,35 @@ d_multicall(const torrent::Object::list_type& args) {
 
   // Add some pre-parsing of the commands, so we don't spend time
   // parsing and searching command map for every single call.
-  std::vector<core::Download*> dlist((*view_itr)->begin_visible(), (*view_itr)->end_visible());
+  // Hold a reference to each download so a command that erases one does not
+  // leave the rest of the loop dispatching on freed memory.
+  core::View::base_type dlist((*view_itr)->begin_visible(), (*view_itr)->end_visible());
 
   torrent::Object             resultRaw = torrent::Object::create_list();
   torrent::Object::list_type& result = resultRaw.as_list();
 
-  for (auto download : dlist) {
+  rpc::preparsed_commands commands([&args](auto& cmds) {
+    for (auto cItr = ++args.begin(); cItr != args.end(); ++cItr)
+      cmds.push_back(rpc::parse_command_object(cItr->as_string()));
+  });
+
+  for (const auto& download : dlist) {
+    // A filter or sort command reading its own view finds the entry the
+    // algorithm moved out empty.
+    if (download == nullptr || download->lifetime().expired())
+      continue;
+
     torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
-    for (torrent::Object::list_const_iterator cItr = ++args.begin(); cItr != args.end(); cItr++) {
-      auto& cmd = cItr->as_string();
-      row.push_back(rpc::parse_command(rpc::make_target(download), cmd.c_str(), cmd.c_str() + cmd.size()).first);
+    // Skip parsing if there are no usable download targets in the view.
+    commands.prepare_if_needed();
+    for (auto& itr : commands) {
+      // A command may erase this download while an outer caller still holds
+      // it, so check its lifetime rather than the use count.
+      if (download->lifetime().expired())
+        break;
+
+      row.push_back(rpc::call_object(itr, rpc::make_target(download)));
     }
   }
 
@@ -253,30 +282,40 @@ torrent::Object
 d_multicall_filtered(const torrent::Object::list_type& args) {
   if (args.size() < 2)
     throw torrent::input_error("d.multicall.filtered requires at least 2 arguments.");
-  torrent::Object::list_const_iterator arg = args.begin();
+
+  auto arg = args.begin();
 
   // Find the given view
-  core::ViewManager* viewManager = control->view_manager();
-  core::ViewManager::iterator view_itr = viewManager->find(arg->as_string().empty() ? "default" : arg->as_string());
+  auto* viewManager = control->view_manager();
+  auto  view_itr    = viewManager->find(arg->as_string().empty() ? "default" : arg->as_string());
 
   if (view_itr == viewManager->end())
     throw torrent::input_error("Could not find view '" + arg->as_string() + "'.");
 
-  // Make a filtered copy of the current item list
+  // Make a filtered copy of the current item list, holding a reference to each
+  // download so a command that erases one cannot free it under us.
   core::View::base_type dlist;
   (*view_itr)->filter_by(*++arg, dlist);
 
+
   // Generate result by iterating over all items
-  torrent::Object             resultRaw = torrent::Object::create_list();
-  torrent::Object::list_type& result = resultRaw.as_list();
+  auto  resultRaw = torrent::Object::create_list();
+  auto& result    = resultRaw.as_list();
+
   ++arg;  // skip to first command
 
   for (const auto& item : dlist) {
+    if (item == nullptr || item->lifetime().expired())
+      continue;
+
     // Add empty row to result
     torrent::Object::list_type& row = result.insert(result.end(), torrent::Object::create_list())->as_list();
 
     // Call the provided commands and assemble their results
     for (torrent::Object::list_const_iterator command = arg; command != args.end(); command++) {
+      if (item->lifetime().expired())
+        break;
+
       auto& cmdstr = command->as_string();
       row.push_back(rpc::parse_command(rpc::make_target(item), cmdstr.c_str(), cmdstr.c_str() + cmdstr.size()).first);
     }
@@ -291,59 +330,75 @@ call_watch_command(const std::string& command, const std::string& path) {
 }
 
 torrent::Object
-directory_watch_added(const torrent::Object::list_type& args) {
+directory_watch(const torrent::Object::list_type& args, int flags) {
   if (args.size() != 2)
     throw torrent::input_error("Too few arguments.");
 
   auto& path = args.front().as_string();
   auto& command = args.back().as_string();
+  std::string expanded_path = expand_path(path);
 
   if (!control->directory_events()->open())
     throw torrent::input_error("Could not open inotify:" + std::string(std::strerror(errno)));
 
-  control->directory_events()->notify_on(path.c_str(),
-                                         torrent::directory_events::flag_on_added | torrent::directory_events::flag_on_updated,
-                                         std::bind(&call_watch_command, command, std::placeholders::_1));
+  torrent::watch_descriptor::slot_string slot =
+    flags == torrent::directory_events::flag_on_ready ?
+    torrent::watch_descriptor::slot_string([command](const auto& arg) { control->watch_ready_queue()->push(command, arg); }) :
+    torrent::watch_descriptor::slot_string(std::bind(&call_watch_command, command, std::placeholders::_1));
+
+  control->directory_events()->notify_on(expanded_path.c_str(), flags, slot);
   return torrent::Object();
+}
+
+torrent::Object
+directory_watch_added(const torrent::Object::list_type& args) {
+  return directory_watch(args,
+                         torrent::directory_events::flag_on_added |
+                         torrent::directory_events::flag_on_updated);
+}
+
+torrent::Object
+directory_watch_ready(const torrent::Object::list_type& args) {
+  return directory_watch(args,
+                         torrent::directory_events::flag_on_ready);
 }
 
 void
 initialize_command_events() {
-  CMD2_ANY_STRING  ("on_ratio",        std::bind(&apply_on_ratio, std::placeholders::_2));
+  CMD2_ANY_STRING  ("on_ratio",                   [](auto, auto& args) { return apply_on_ratio(args); });
 
-  CMD2_ANY         ("start_tied",      std::bind(&apply_start_tied));
-  CMD2_ANY         ("stop_untied",     std::bind(&apply_stop_untied));
-  CMD2_ANY         ("close_untied",    std::bind(&apply_close_untied));
-  CMD2_ANY         ("remove_untied",   std::bind(&apply_remove_untied));
+  CMD2_ANY         ("start_tied",                 [](auto, auto) { return apply_start_tied(); });
+  CMD2_ANY         ("stop_untied",                [](auto, auto) { return apply_stop_untied(); });
+  CMD2_ANY         ("close_untied",               [](auto, auto) { return apply_close_untied(); });
+  CMD2_ANY         ("remove_untied",              [](auto, auto) { return apply_remove_untied(); });
 
-  // TODO: Deprecate schedule2 in the future.
-  CMD2_ANY_LIST    ("schedule",         std::bind(&apply_schedule, std::placeholders::_2));
-  CMD2_ANY_LIST    ("schedule2",        std::bind(&apply_schedule, std::placeholders::_2));
-  CMD2_ANY_STRING_V("schedule.remove",  std::bind(&rpc::CommandScheduler::erase_str, control->command_scheduler(), std::placeholders::_2));
-  CMD2_ANY_STRING_V("schedule_remove2", std::bind(&rpc::CommandScheduler::erase_str, control->command_scheduler(), std::placeholders::_2));
+  CMD2_ANY_LIST    ("schedule",                   [](auto, auto& args) { return apply_schedule(args, false); });
+  CMD2_ANY_LIST    ("schedule.if_absent",         [](auto, auto& args) { return apply_schedule(args, true); });
+  CMD2_ANY_STRING_V("schedule.remove",            [](auto, auto& str) { return control->command_scheduler()->erase_str(str); });
 
-  CMD2_ANY_STRING_V("import",          std::bind(&apply_import, std::placeholders::_2));
-  CMD2_ANY_STRING_V("try_import",      std::bind(&apply_try_import, std::placeholders::_2));
+  CMD2_ANY_STRING_V("import",                     [](auto, auto& str) { return apply_import(str); });
+  CMD2_ANY_STRING_V("try_import",                 [](auto, auto& str) { return apply_try_import(str); });
 
-  CMD2_ANY_LIST    ("load.normal",        std::bind(&apply_load, std::placeholders::_2, core::Manager::create_quiet | core::Manager::create_tied));
-  CMD2_ANY_LIST    ("load.verbose",       std::bind(&apply_load, std::placeholders::_2, core::Manager::create_tied));
-  CMD2_ANY_LIST    ("load.start",         std::bind(&apply_load, std::placeholders::_2,
-                                                         core::Manager::create_quiet | core::Manager::create_tied | core::Manager::create_start));
-  CMD2_ANY_LIST    ("load.start_verbose", std::bind(&apply_load, std::placeholders::_2, core::Manager::create_tied  | core::Manager::create_start));
-  CMD2_ANY_LIST    ("load.raw",           std::bind(&apply_load, std::placeholders::_2, core::Manager::create_quiet | core::Manager::create_raw_data));
-  CMD2_ANY_LIST    ("load.raw_verbose",   std::bind(&apply_load, std::placeholders::_2, core::Manager::create_raw_data));
-  CMD2_ANY_LIST    ("load.raw_start",     std::bind(&apply_load, std::placeholders::_2,
-                                                         core::Manager::create_quiet | core::Manager::create_start | core::Manager::create_raw_data));
-  CMD2_ANY_LIST    ("load.raw_start_verbose", std::bind(&apply_load, std::placeholders::_2, core::Manager::create_start | core::Manager::create_raw_data));
+  CMD2_ANY_LIST    ("load.normal",                [](auto, auto& args) { return apply_load(args, core::Manager::create_quiet | core::Manager::create_tied); });
+  CMD2_ANY_LIST    ("load.verbose",               [](auto, auto& args) { return apply_load(args, core::Manager::create_tied); });
+  CMD2_ANY_LIST    ("load.start",                 [](auto, auto& args) { return apply_load(args, core::Manager::create_quiet | core::Manager::create_tied | core::Manager::create_start); });
+  CMD2_ANY_LIST    ("load.start_verbose",         [](auto, auto& args) { return apply_load(args, core::Manager::create_tied | core::Manager::create_start); });
+  CMD2_ANY_LIST    ("load.raw",                   [](auto, auto& args) { return apply_load(args, core::Manager::create_quiet | core::Manager::create_raw_data); });
+  CMD2_ANY_LIST    ("load.raw_verbose",           [](auto, auto& args) { return apply_load(args, core::Manager::create_raw_data); });
+  CMD2_ANY_LIST    ("load.raw_start",             [](auto, auto& args) { return apply_load(args, core::Manager::create_quiet | core::Manager::create_start | core::Manager::create_raw_data); });
+  CMD2_ANY_LIST    ("load.raw_start_verbose",     [](auto, auto& args) { return apply_load(args, core::Manager::create_start | core::Manager::create_raw_data); });
 
-  CMD2_ANY_VALUE   ("close_low_diskspace",        std::bind(&apply_close_low_diskspace, std::placeholders::_2, 99));
-  CMD2_ANY_VALUE   ("close_low_diskspace.normal", std::bind(&apply_close_low_diskspace, std::placeholders::_2, 3));
+  CMD2_ANY_VALUE   ("close_low_diskspace",        [](auto, auto& arg) { return apply_close_low_diskspace(arg, 99); });
+  CMD2_ANY_VALUE   ("close_low_diskspace.normal", [](auto, auto& arg) { return apply_close_low_diskspace(arg, 3); });
 
-  CMD2_ANY_LIST    ("download_list",       std::bind(&apply_download_list, std::placeholders::_2));
-  CMD2_ANY_LIST    ("d.multicall2",        std::bind(&d_multicall, std::placeholders::_2));
-  CMD2_ANY_LIST    ("d.multicall.filtered", std::bind(&d_multicall_filtered, std::placeholders::_2));
+  CMD2_ANY_LIST    ("download_list",              [](auto, auto& args) { return apply_download_list(args); });
 
-  CMD2_ANY_LIST    ("directory.watch.added", std::bind(&directory_watch_added, std::placeholders::_2));
+  // TODO: Deprecate d.multicall2. (6/2026)
+  CMD2_ANY_LIST    ("d.multicall",                [](auto, auto& args) { return d_multicall(args); });
+  CMD2_ANY_LIST    ("d.multicall.filtered",       [](auto, auto& args) { return d_multicall_filtered(args); });
+
+  CMD2_ANY_LIST    ("directory.watch.added",      [](auto, auto& args) { return directory_watch_added(args); });
+  CMD2_ANY_LIST    ("directory.watch.ready",      [](auto, auto& args) { return directory_watch_ready(args); });
 
   rpc::rpc.mark_safe("start_tied");
   rpc::rpc.mark_safe("stop_untied");
@@ -353,6 +408,6 @@ initialize_command_events() {
   rpc::rpc.mark_safe("close_low_diskspace");
   rpc::rpc.mark_safe("close_low_diskspace.normal");
   rpc::rpc.mark_safe("download_list");
-  rpc::rpc.mark_safe("d.multicall2");
+  rpc::rpc.mark_safe("d.multicall");
   rpc::rpc.mark_safe("d.multicall.filtered");
 }

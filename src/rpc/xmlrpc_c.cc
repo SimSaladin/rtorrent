@@ -27,11 +27,11 @@ public:
   virtual ~xmlrpc_error_c() throw() {}
 
   virtual int         type() const throw() { return m_type; }
-  virtual const char* what() const throw() { return m_msg; }
+  virtual const char* what() const throw() { return m_msg.c_str(); }
 
 private:
   int                 m_type;
-  const char*         m_msg;
+  std::string         m_msg;
 };
 
 torrent::Object xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value, int call_type = 0, rpc::target_type* target = NULL, std::function<void()>* deleter = NULL);
@@ -44,10 +44,9 @@ xmlrpc_list_entry_to_object(xmlrpc_env* env, xmlrpc_value* src, int index) {
   if (env->fault_occurred)
     throw xmlrpc_error_c(env);
 
-  torrent::Object obj = xmlrpc_to_object(env, tmp);
-  xmlrpc_DECREF(tmp);
+  utils::scope_guard guard([tmp]() { xmlrpc_DECREF(tmp); });
 
-  return obj;
+  return xmlrpc_to_object(env, tmp);
 }
 
 int64_t
@@ -77,16 +76,18 @@ xmlrpc_list_entry_to_value(xmlrpc_env* env, xmlrpc_value* src, int index) {
   {
     const char* str;
     xmlrpc_read_string(env, tmp, &str);
+    xmlrpc_DECREF(tmp);
 
     if (env->fault_occurred)
       throw xmlrpc_error_c(env);
 
     const char* end = str;
     int64_t v3 = ::strtoll(str, (char**)&end, 0);
+    bool invalid = *str == '\0' || *end != '\0';
 
     ::free((void*)str);
 
-    if (*str == '\0' || *end != '\0')
+    if (invalid)
       throw xmlrpc_error_c(XMLRPC_TYPE_ERROR, "Invalid index.");
 
     return v3;
@@ -211,10 +212,10 @@ xmlrpc_to_object(xmlrpc_env* env, xmlrpc_value* value, int call_type, rpc::targe
       if (env->fault_occurred)
         throw xmlrpc_error_c(env);
 
+      utils::scope_guard guard([tmp]() { xmlrpc_DECREF(tmp); });
+
       if (target != nullptr)
         std::tie(*target, *deleter) = xmlrpc_to_target(env, tmp, call_type);
-
-      xmlrpc_DECREF(tmp);
 
       if (env->fault_occurred)
         throw xmlrpc_error_c(env);
@@ -272,12 +273,27 @@ object_to_xmlrpc(xmlrpc_env* env, const torrent::Object& object) {
 #ifdef XMLRPC_HAVE_I8
     if (rpc.dialect() != XmlRpc::dialect_generic)
       return xmlrpc_i8_new(env, object.as_value());
-#else
-    return xmlrpc_int_new(env, object.as_value());
 #endif
+
+    return xmlrpc_int_new(env, object.as_value());
 
   case torrent::Object::TYPE_STRING:
   {
+    if (object.flags() & torrent::Object::flag_as_binary) {
+
+      // This causes decode-and-reencode for base64, as XMLRPC-C doesn't allow us to pass base64 strings.
+      if (object.flags() & torrent::Object::flag_base64) {
+        auto binary_data = torrent::utils::transform_from_base64_unsafe(object.as_string());
+
+        if (!binary_data.has_value())
+          throw torrent::input_error("invalid base64 string in base64-as-binary object");
+
+        return xmlrpc_base64_new(env, binary_data->size(), reinterpret_cast<const unsigned char*>(binary_data->data()));
+      }
+
+      return xmlrpc_base64_new(env, object.as_string().size(), reinterpret_cast<const unsigned char*>(object.as_string().c_str()));
+    }
+
 #ifdef XMLRPC_HAVE_I8
     // The versions that support I8 do implicit utf-8 validation.
     xmlrpc_value* result = xmlrpc_string_new(env, object.as_string().c_str());
@@ -424,6 +440,8 @@ XmlRpc::cleanup() {
   xmlrpc_registry_free((xmlrpc_registry*)m_registry);
   xmlrpc_env_clean((xmlrpc_env*)m_env);
   delete (xmlrpc_env*)m_env;
+  m_env = nullptr;
+  m_registry = nullptr;
 }
 
 bool
@@ -435,6 +453,11 @@ XmlRpc::process(const char* inBuffer, uint32_t length, slot_write slotWrite) {
 
   if (local_env.fault_occurred && local_env.fault_code == XMLRPC_INTERNAL_ERROR)
     throw torrent::internal_error("Internal error in XMLRPC.");
+
+  if (memblock == nullptr) {
+    xmlrpc_env_clean(&local_env);
+    return false;
+  }
 
   bool result = slotWrite((const char*)xmlrpc_mem_block_contents(memblock),
                           xmlrpc_mem_block_size(memblock));
@@ -509,9 +532,6 @@ XmlRpc::size_limit() {
 
 void
 XmlRpc::set_size_limit(uint64_t size) {
-  if (size >= (64 << 20))
-    throw torrent::input_error("Invalid XMLRPC limit size.");
-
   xmlrpc_limit_set(XMLRPC_XML_SIZE_LIMIT_ID, size);
 }
 

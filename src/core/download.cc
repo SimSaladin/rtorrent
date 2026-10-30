@@ -32,21 +32,6 @@ Download::~Download() {
   m_download = download_type();
 }
 
-void
-Download::enable_udp_trackers(bool state) {
-  for (int idx = 0, end = m_download.tracker_controller().size(); idx < end; ++idx) {
-    auto tracker = m_download.tracker_controller().at(idx);
-
-    if (tracker.type() != torrent::TRACKER_UDP)
-      continue;
-
-    if (state)
-      tracker.enable();
-    else
-      tracker.disable();
-  }
-}
-
 uint32_t
 Download::priority() {
   return bencode()->get_key("rtorrent").get_key_value("priority");
@@ -103,19 +88,31 @@ Download::distributed_copies() const {
 }
 
 void
-Download::set_throttle_name(const std::string& throttleName) {
+Download::set_throttle_name(const std::string& name) {
   if (m_download.info()->is_active())
     throw torrent::input_error("Cannot set throttle on active download.");
 
-  torrent::ThrottlePair throttles = control->core()->get_throttle(throttleName);
+  auto throttles = control->core()->get_throttle(name);
+
   m_download.set_upload_throttle(throttles.first);
   m_download.set_download_throttle(throttles.second);
 
-  m_download.bencode()->get_key("rtorrent").insert_key("throttle_name", throttleName);
+  m_download.bencode()->get_key("rtorrent").insert_key("throttle_name", name);
 }
 
 void
-Download::set_root_directory(const std::string& path) {
+Download::set_directory(const std::string& path) {
+  if (!m_download.file_list()->is_multi_file())
+    return set_base_directory(path);
+
+  if (path.empty() || *path.rbegin() == '/')
+    return set_base_directory(path + m_download.info()->name_sanitized());
+
+  set_base_directory(path + "/" + m_download.info()->name_sanitized());
+}
+
+void
+Download::set_base_directory(const std::string& path) {
   // If the download is open, hashed and has completed chunks make
   // sure to verify that the download files are still present.
   //
@@ -131,16 +128,15 @@ Download::set_root_directory(const std::string& path) {
 
       (file_list->is_multi_file() ?
        !file_list->is_root_dir_created() :
-       !file_stat.update(file_list->front()->frozen_path()))) {
+       !file_stat.update(file_list->front()->frozen_path().str()))) {
 
     set_message("Cannot change the directory of an open download after the files have been moved.");
-    rpc::call_command("d.state.set", (int64_t)0, rpc::make_target(this));
     control->core()->download_list()->close_directly(this);
 
     throw torrent::input_error("Cannot change the directory of an open download after the files have been moved.");
   }
 
-  control->core()->download_list()->close_directly(this);
+  control->core()->download_list()->close_files(this);
   file_list->set_root_dir(expand_path(path));
 
   bencode()->get_key("rtorrent").insert_key("directory", path);

@@ -1,29 +1,36 @@
 #ifndef RTORRENT_RPC_SCGI_TASK_H
 #define RTORRENT_RPC_SCGI_TASK_H
 
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <vector>
-#include <torrent/event.h>
+#include <torrent/system/event.h>
+#include <torrent/system/scheduler.h>
 
 namespace rpc {
 
 class SCgi;
 
-class SCgiTask : public torrent::Event {
+class SCgiTask : public torrent::system::Event {
 public:
   static constexpr int default_buffer_size = 8191;
   static constexpr int max_header_size     = 2000;
-  static constexpr int max_content_size    = (2 << 23);
+  static constexpr int max_content_size    = (1 << 26);
+
+  static constexpr uint32_t max_response_size = (100 << 20);
+
+  static constexpr auto timeout_request = std::chrono::seconds(60);
 
   enum ContentType { XML, JSON };
 
-  SCgiTask() { m_fileDesc = -1; }
+  SCgiTask();
 
   const char*         type_name() const override { return "scgi-task"; }
 
-  bool                is_open() const      { return m_fileDesc != -1; }
-  bool                is_available() const { return m_fileDesc == -1; }
+  bool                is_open() const      { return file_descriptor() != -1; }
+  bool                is_available() const { return file_descriptor() == -1; }
 
   void                open(SCgi* parent, int fd);
   void                cancel_open();
@@ -54,7 +61,9 @@ private:
   void                plaintext_response(const char* buffer, uint32_t content_length);
   void                gzip_response(const char* buffer, uint32_t content_length);
 
-  SCgi*               m_parent{};
+  SCgi*                           m_parent{};
+  torrent::system::callback_id    m_callback_id;
+  torrent::system::SchedulerEntry m_task_timeout;
 
   std::mutex          m_result_mutex;
 
@@ -67,6 +76,7 @@ private:
 
   bool                m_accepts_compression{};
   bool                m_trusted{true};
+  bool                m_content_type_set{false};
 };
 
 }

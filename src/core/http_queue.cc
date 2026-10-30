@@ -9,17 +9,21 @@
 namespace core {
 
 HttpQueue::iterator
-HttpQueue::insert(const std::string& url, std::shared_ptr<std::ostream> stream) {
+HttpQueue::insert(const std::string& url, std::shared_ptr<std::ostream> stream,
+                  std::function<void()> done_fn, std::function<void(const std::string&)> failed_fn) {
   auto itr = base_type::insert(end(), torrent::net::HttpGet(url, stream));
+
+  itr->set_max_file_size(15 << 20);
+  itr->set_redirect_only_http_https();
 
   for (auto& slot : m_signal_insert)
     slot(*itr);
 
-  itr->add_done_slot([this, itr]() { erase(itr); });
-  itr->add_failed_slot([this, itr](auto) { erase(itr); });
+  itr->add_done_slot(torrent::this_thread::thread(),   std::move(done_fn));
+  itr->add_done_slot(torrent::this_thread::thread(),   [this, itr]() { erase(itr); });
 
-  // TODO: Downloading http torrents doesn't seem to work.
-  // TODO: Quitting no longer works.
+  itr->add_failed_slot(torrent::this_thread::thread(), std::move(failed_fn));
+  itr->add_failed_slot(torrent::this_thread::thread(), [this, itr](auto) { erase(itr); });
 
   torrent::net_thread::http_stack()->start_get(*itr);
 

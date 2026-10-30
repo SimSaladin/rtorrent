@@ -16,14 +16,34 @@
 namespace core {
 
 // Also add focus thingie here?
+// Matches the list entry that owns a given download.
+inline auto
+entry_is(Download* download) {
+  return [download](const std::shared_ptr<Download>& entry) { return entry.get() == download; };
+}
+
+// Held while a filter or sort command runs, see View::check_unlocked().
+static unsigned int view_lock_count = 0;
+
+struct view_lock {
+  view_lock() { view_lock_count++; }
+  ~view_lock() { view_lock_count--; }
+};
+
 struct view_downloads_compare {
   view_downloads_compare(const torrent::Object& cmd) :
       m_command(cmd) {}
+
+  bool operator()(const std::shared_ptr<Download>& d1, const std::shared_ptr<Download>& d2) const {
+    return (*this)(d1.get(), d2.get());
+  }
 
   bool operator()(Download* d1, Download* d2) const {
     try {
       if (m_command.is_empty())
         return false;
+
+      view_lock lock;
 
       if (!m_command.is_dict_key())
         return rpc::parse_command_single(rpc::make_target_pair(d1, d2), m_command.as_string()).as_value();
@@ -54,6 +74,10 @@ struct view_downloads_filter {
   view_downloads_filter(const torrent::Object& cmd, const torrent::Object& cmd2) :
       m_command(cmd), m_command2(cmd2) {}
 
+  bool operator()(const std::shared_ptr<Download>& d1) const {
+    return (*this)(d1.get());
+  }
+
   bool operator()(Download* d1) const {
     return this->evalCmd(m_command, d1) && this->evalCmd(m_command2, d1);
   }
@@ -63,6 +87,7 @@ struct view_downloads_filter {
       return true;
 
     try {
+      view_lock lock;
       torrent::Object result;
 
       if (cmd.is_dict_key()) {
@@ -112,6 +137,12 @@ struct view_downloads_filter {
 };
 
 void
+View::check_unlocked() {
+  if (view_lock_count != 0)
+    throw torrent::input_error("View filter and sort commands cannot change views or downloads.");
+}
+
+void
 View::emit_changed() {
   torrent::this_thread::scheduler()->update_wait_for(&m_delay_changed, 0ms);
 }
@@ -152,7 +183,7 @@ View::initialize(const std::string& name) {
 
 void
 View::erase(Download* download) {
-  iterator itr = std::find(base_type::begin(), base_type::end(), download);
+  iterator itr = std::find_if(base_type::begin(), base_type::end(), entry_is(download));
 
   if (itr >= end_visible()) {
     erase_internal(itr);
@@ -165,22 +196,28 @@ View::erase(Download* download) {
 
 void
 View::set_visible(Download* download) {
-  iterator itr = std::find(begin_filtered(), end_filtered(), download);
+  check_unlocked();
+
+  iterator itr = std::find_if(begin_filtered(), end_filtered(), entry_is(download));
 
   if (itr == end_filtered())
     return;
 
   // Don't optimize erase since we want to keep the order of the
   // non-visible elements.
+  auto entry = *itr;
+
   base_type::erase(itr);
-  insert_visible(download);
+  insert_visible(entry);
 
   rpc::call_object_nothrow(m_event_added, rpc::make_target(download));
 }
 
 void
 View::set_not_visible(Download* download) {
-  iterator itr = std::find(begin_visible(), end_visible(), download);
+  check_unlocked();
+
+  iterator itr = std::find_if(begin_visible(), end_visible(), entry_is(download));
 
   if (itr == end_visible())
     return;
@@ -190,15 +227,17 @@ View::set_not_visible(Download* download) {
 
   // Don't optimize erase since we want to keep the order of the
   // non-visible elements.
+  auto entry = *itr;
+
   base_type::erase(itr);
-  base_type::push_back(download);
+  base_type::push_back(entry);
 
   rpc::call_object_nothrow(m_event_removed, rpc::make_target(download));
 }
 
 void
 View::next_focus(unsigned int i) {
-  if (empty())
+  if (empty_visible())
     return;
 
   // If at the boundary, roll over
@@ -221,7 +260,7 @@ View::next_focus(unsigned int i) {
 
 void
 View::prev_focus(unsigned int i) {
-  if (empty())
+  if (empty_visible())
     return;
 
   // If at the boundary, roll over
@@ -241,17 +280,21 @@ View::prev_focus(unsigned int i) {
 
 void
 View::sort() {
-  Download* curFocus = focus() != end_visible() ? *focus() : NULL;
+  check_unlocked();
+
+  Download* curFocus = focus() != end_visible() ? focus()->get() : NULL;
 
   // Don't go randomly switching around equivalent elements.
   std::stable_sort(begin(), end_visible(), view_downloads_compare(m_sortCurrent));
 
-  m_focus = position(std::find(begin(), end_visible(), curFocus));
+  m_focus = position(std::find_if(begin(), end_visible(), entry_is(curFocus)));
   emit_changed();
 }
 
 void
 View::filter() {
+  check_unlocked();
+
   // Do NOT allow filter STARTED and STOPPED views: they are special
   if (m_name == "started" || m_name == "stopped")
     return;
@@ -269,21 +312,19 @@ View::filter() {
   // Fix this...
   m_focus = std::min(m_focus, m_size);
 
-  // The commands are allowed to remove itself from or change View
-  // sorting since the commands are being called on the 'changed'
-  // vector. But this will cause undefined behavior if elements are
-  // removed.
-  //
-  // Consider if View should lock itself (and throw) if erase events
-  // are triggered on a Download in the 'changed' list. This can be
-  // done by using a base_type* member variable, and making sure we
-  // set the elements to NULL as we trigger commands on them. Or
-  // perhaps always clear them, thus not throwing anything.
+  // The events run on the 'changed' copy after the filter commands, so
+  // they may change views. Skip downloads an earlier event erased.
   if (!m_event_removed.is_empty())
-    std::for_each(changed.begin(), splitChanged, std::bind(&rpc::call_object_d_nothrow, m_event_removed, std::placeholders::_1));
+    std::for_each(changed.begin(), splitChanged, [this](const auto& d) {
+        if (!d->lifetime().expired())
+          rpc::call_object_d_nothrow(m_event_removed, d.get());
+      });
 
   if (!m_event_added.is_empty())
-    std::for_each(changed.begin(), splitChanged, std::bind(&rpc::call_object_d_nothrow, m_event_added, std::placeholders::_1));
+    std::for_each(splitChanged, changed.end(), [this](const auto& d) {
+        if (!d->lifetime().expired())
+          rpc::call_object_d_nothrow(m_event_added, d.get());
+      });
 
   emit_changed();
 }
@@ -294,21 +335,25 @@ View::filter_by(const torrent::Object& condition, View::base_type& result) {
   view_downloads_filter matches = view_downloads_filter(condition, m_temp_filter);
 
   for (iterator itr = begin_visible(); itr != end_visible(); ++itr)
-    if (matches(*itr))
+    if (*itr != nullptr && matches(itr->get()))
       result.push_back(*itr);
 }
 
 void
 View::filter_download(core::Download* download) {
-  iterator itr = std::find(base_type::begin(), base_type::end(), download);
+  check_unlocked();
+
+  iterator itr = std::find_if(base_type::begin(), base_type::end(), entry_is(download));
 
   if (itr == base_type::end())
     throw torrent::internal_error("View::filter_download(...) could not find download.");
 
   if (view_downloads_filter(m_filter, m_temp_filter)(download)) {
     if (itr >= end_visible()) {
+      auto entry = *itr;
+
       erase_internal(itr);
-      insert_visible(download);
+      insert_visible(entry);
 
       rpc::call_object_nothrow(m_event_added, rpc::make_target(download));
 
@@ -317,16 +362,20 @@ View::filter_download(core::Download* download) {
       // already visible.
       //
       // Consider removing this.
+      auto entry = *itr;
+
       erase_internal(itr);
-      insert_visible(download);
+      insert_visible(entry);
     }
 
   } else {
     if (itr >= end_visible())
       return;
 
+    auto entry = *itr;
+
     erase_internal(itr);
-    base_type::push_back(download);
+    base_type::push_back(entry);
 
     rpc::call_object_nothrow(m_event_removed, rpc::make_target(download));
   }
@@ -345,8 +394,8 @@ View::clear_filter_on() {
 }
 
 inline void
-View::insert_visible(Download* d) {
-  auto itr = std::find_if(begin_visible(), end_visible(), [this, d](auto d2) { return view_downloads_compare(m_sortNew)(d, d2); });
+View::insert_visible(const std::shared_ptr<Download>& d) {
+  auto itr = std::find_if(begin_visible(), end_visible(), [this, &d](const auto& d2) { return view_downloads_compare(m_sortNew)(d.get(), d2.get()); });
 
   m_size++;
   m_focus += (m_focus >= position(itr));

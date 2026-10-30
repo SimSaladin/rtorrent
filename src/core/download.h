@@ -1,6 +1,7 @@
 #ifndef RTORRENT_CORE_DOWNLOAD_H
 #define RTORRENT_CORE_DOWNLOAD_H
 
+#include <memory>
 #include <torrent/common.h>
 #include <torrent/download.h>
 #include <torrent/download_info.h>
@@ -21,6 +22,8 @@ public:
   typedef torrent::TrackerList          tracker_list_type;
   typedef torrent::ConnectionList       connection_list_type;
   typedef download_type::ConnectionType connection_type;
+
+  static constexpr uint32_t default_resume_flags = ~uint32_t{} & ~torrent::Download::open_enable_fallocate;
 
   static const int variable_hashing_stopped = 0;
   static const int variable_hashing_initial = 1;
@@ -48,6 +51,14 @@ public:
   bool                is_hash_checking() const                 { return m_download.is_hash_checking(); }
 
   bool                is_hash_failed() const                   { return m_hashFailed; }
+
+  // Expires once the download is erased, even if other owners keep the
+  // object alive. Take it before triggering events that may erase.
+  std::weak_ptr<void> lifetime() const                         { return m_lifetime; }
+  void                release_lifetime()                       { m_lifetime.reset(); }
+
+  bool                is_erasing() const                       { return m_erasing; }
+  void                set_erasing()                            { m_erasing = true; }
   void                set_hash_failed(bool v)                  { m_hashFailed = v; }
 
   download_type*       download()                              { return &m_download; }
@@ -70,17 +81,16 @@ public:
   const std::string&  message() const                          { return m_message; }
   void                set_message(const std::string& msg)      { m_message = msg; }
 
-  void                enable_udp_trackers(bool state);
-
   uint32_t            priority();
   void                set_priority(uint32_t p);
 
   uint32_t            resume_flags()                           { return m_resumeFlags; }
   void                set_resume_flags(uint32_t flags)         { m_resumeFlags = flags; }
 
-  void                set_root_directory(const std::string& path);
+  void                set_directory(const std::string& path);
+  void                set_base_directory(const std::string& path);
 
-  void                set_throttle_name(const std::string& throttleName);
+  void                set_throttle_name(const std::string& name);
 
   bool                operator == (const std::string& str) const;
 
@@ -101,8 +111,10 @@ private:
   // Store the FileList instance so we can use slots etc on it.
   download_type       m_download;
   bool                m_hashFailed{};
+  bool                m_erasing{};
+  std::shared_ptr<void> m_lifetime{std::make_shared<char>()};
   std::string         m_message;
-  uint32_t            m_resumeFlags{~uint32_t{}};
+  uint32_t            m_resumeFlags{default_resume_flags};
   unsigned int        m_group{};
 };
 

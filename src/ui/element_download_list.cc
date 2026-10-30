@@ -119,7 +119,7 @@ ElementDownloadList::receive_command(const char* cmd) {
     m_view->set_last_changed();
 
   } catch (torrent::input_error& e) {
-    lt_log_print(torrent::LOG_WARN, "Command failed: %s", e.what());
+    lt_log_print(torrent::LOG_ERRORS, "Command failed: %s", e.what());
     return;
   }
 }
@@ -196,9 +196,10 @@ ElementDownloadList::receive_cycle_throttle() {
   if (m_view->focus() == m_view->end_visible())
     return;
 
-  core::Download* download = *m_view->focus();
+  core::Download* download = m_view->focus()->get();
+
   if (download->is_active()) {
-    lt_log_print(torrent::LOG_TORRENT_WARN, "Cannot change throttle on active download.");
+    lt_log_print_hash(torrent::LOG_TORRENT_DEBUG, download->info()->hash(), "cannot change throttle on active download");
     return;
   }
 

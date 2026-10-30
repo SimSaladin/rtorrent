@@ -15,12 +15,13 @@ namespace ui {
 
 class ElementLogComplete : public ElementBase {
 public:
-  typedef display::WindowLogComplete    WLogComplete;
+  using WLogComplete = display::WindowLogComplete;
 
   ElementLogComplete(torrent::log_buffer* l);
+  ~ElementLogComplete() override;
 
-  void                activate(display::Frame* frame, bool focus = true);
-  void                disable();
+  void                activate(display::Frame* frame, bool focus = true) override;
+  void                disable() override;
 
   display::Window*    window();
 
@@ -30,6 +31,10 @@ private:
   WLogComplete*       m_window{};
 
   torrent::log_buffer* m_log;
+
+  align_cacheline
+
+  std::atomic<bool>   m_log_updating{};
 };
 
 }

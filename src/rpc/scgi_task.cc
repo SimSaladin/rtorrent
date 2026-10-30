@@ -11,10 +11,11 @@
 #include <sys/socket.h>
 #include <torrent/exceptions.h>
 #include <torrent/net/fd.h>
-#include <torrent/net/poll.h>
 #include <torrent/runtime/socket_manager.h>
+#include <torrent/system/callbacks.h>
+#include <torrent/system/poll.h>
+#include <torrent/system/scheduler.h>
 #include <torrent/utils/log.h>
-#include <torrent/utils/thread.h>
 
 #include "control.h"
 #include "globals.h"
@@ -23,6 +24,12 @@
 #include "utils/gzip.h"
 
 namespace rpc {
+
+SCgiTask::SCgiTask()
+  : m_callback_id(torrent::system::make_callback_id()) {
+
+  m_task_timeout.slot() = [this]() { close(); };
+}
 
 void
 SCgiTask::open(SCgi* parent, int fd) {
@@ -34,11 +41,17 @@ SCgiTask::open(SCgi* parent, int fd) {
 
   m_content_length      = 0;
   m_content_type        = XML;
+  m_content_type_set    = false;
   m_accepts_compression = false;
+  m_trusted             = true;  // SCgiTask is pooled and reused; reset trust to default
+                                 // so a prior untrusted connection does not leak its
+                                 // m_trusted=false into the next reuse, given that the
+                                 // UNTRUSTED_CONNECTION=0 parse branch is a no-op.
 
   torrent::this_thread::poll()->open(this);
   torrent::this_thread::poll()->insert_read(this);
-  torrent::this_thread::poll()->insert_error(this);
+
+  torrent::this_thread::scheduler()->update_wait_for_ceil_seconds(&m_task_timeout, timeout_request);
 
   auto lock = std::lock_guard<std::mutex>(m_result_mutex);
 
@@ -51,10 +64,10 @@ SCgiTask::cancel_open() {
   if (!is_open())
     return;
 
+  torrent::this_thread::scheduler()->erase(&m_task_timeout);
   torrent::this_thread::poll()->remove_and_close(this);
 
-  torrent::fd_close(file_descriptor());
-  set_file_descriptor(-1);
+  torrent::fd_close_and_clear(file_descriptor_ref());
 };
 
 void
@@ -62,25 +75,37 @@ SCgiTask::close() {
   if (!is_open())
     return;
 
-  torrent::main_thread::thread()->cancel_callback_and_wait(this);
-  torrent::utils::Thread::self()->cancel_callback(this);
+  torrent::this_thread::scheduler()->erase(&m_task_timeout);
+
+  torrent::system::cancel_callback_and_wait(m_callback_id, scgi_thread::thread(), torrent::main_thread::thread());
 
   torrent::runtime::socket_manager()->close_event_or_throw(this, [this]() {
       torrent::this_thread::poll()->remove_and_close(this);
-
-      torrent::fd_close(file_descriptor());
-      set_file_descriptor(-1);
+      torrent::fd_close_and_clear(file_descriptor_ref());
     });
 
   // The callbacks are guaranteed to be finished/canceled at this point.
   auto lock = std::lock_guard<std::mutex>(m_result_mutex);
 
-  m_buffer.clear();
+  // clear() would keep the capacity, and the task is pooled for the lifetime of the process.
+  std::vector<char>().swap(m_buffer);
 }
 
 void
 SCgiTask::event_read() {
-  int bytes = ::recv(m_fileDesc, m_buffer.data() + m_position, m_buffer.size() - m_position, 0);
+  int read_length = m_buffer.size() - m_position;
+
+  if (m_content_length == 0)
+    read_length--;
+
+  if (read_length <= 0) {
+    if (m_content_length == 0)
+      return close();
+
+    throw torrent::internal_error("SCgiTask::event_read() no space in buffer for event_read.");
+  }
+
+  int bytes = ::recv(file_descriptor(), m_buffer.data() + m_position, read_length, 0);
 
   if (bytes <= 0) {
     if (bytes == 0 || !(errno == EAGAIN || errno == EINTR))
@@ -106,6 +131,9 @@ SCgiTask::event_read() {
     // connection.
 
     if (current == m_buffer.data())
+      return;
+
+    if (current == m_buffer.data() + m_position)
       return;
 
     if (*current != ':' || header_size < 17 || header_size > max_header_size)
@@ -134,6 +162,8 @@ SCgiTask::event_read() {
 
   torrent::this_thread::poll()->remove_read(this);
 
+  torrent::this_thread::scheduler()->update_wait_for_ceil_seconds(&m_task_timeout, timeout_request);
+
   if (m_parent->log_fd() >= 0) {
     [[maybe_unused]] int result;
 
@@ -145,6 +175,11 @@ SCgiTask::event_read() {
 
   lt_log_print_dump(torrent::LOG_RPC_DUMP, m_buffer.data() + m_body, m_content_length, "scgi", "RPC read.", 0);
 
+  if (!m_content_type_set) {
+    if (m_buffer[m_body] == '{' || m_buffer[m_body] == '[')
+      m_content_type = ContentType::JSON;
+  }
+
   receive_call(m_buffer.data() + m_body, m_content_length);
   return;
 
@@ -155,10 +190,10 @@ event_read_failed:
 
 void
 SCgiTask::event_write() {
-  int bytes = ::send(m_fileDesc, m_buffer.data() + m_position, m_buffer.size() - m_position, 0);
+  int bytes = ::send(file_descriptor(), m_buffer.data() + m_position, m_buffer.size() - m_position, 0);
 
   if (bytes == -1) {
-    if (!(errno == EAGAIN || errno == EINTR || errno == EPIPE))
+    if (!(errno == EAGAIN || errno == EINTR))
       close();
 
     return;
@@ -223,7 +258,8 @@ SCgiTask::parse_headers(const char* current, unsigned int header_length) {
       if (std::strncmp(value, "1", 1+1) == 0)
         m_trusted = false;
       else if (std::strncmp(value, "0", 1+1) == 0)
-        ; // Default is trusted, so do nothing.
+        m_trusted = true;  // Explicit reset (open() also resets, but be defensive in case
+                           // future refactors stop pooling tasks or skip the open() reset).
       else
         return false;
     }
@@ -277,19 +313,17 @@ scgi_match_content_type(const std::string& content_type, const char* type) {
 bool
 SCgiTask::detect_content_type(const std::string& content_type) {
   if (content_type.empty()) {
-    // If no CONTENT_TYPE was supplied, peek at the body to check if it's JSON
-    // { is a single request object, while [ is a batch array
-
-    if (m_buffer[m_body] == '{' || m_buffer[m_body] == '[')
-      m_content_type = ContentType::JSON;
-    else
-      m_content_type = ContentType::XML;
+    // Defer body-peek detection until the full body is received.
+    // event_read() will auto-detect from the first body byte after
+    // confirming m_position >= m_body + m_content_length.
 
   } else if (scgi_match_content_type(content_type, "application/json")) {
-    m_content_type = ContentType::JSON;
+    m_content_type     = ContentType::JSON;
+    m_content_type_set = true;
 
   } else if (scgi_match_content_type(content_type, "text/xml")) {
-    m_content_type = ContentType::XML;
+    m_content_type     = ContentType::XML;
+    m_content_type_set = true;
 
   } else {
     // If the content type is not JSON or XML, we don't know how to handle it.
@@ -301,7 +335,7 @@ SCgiTask::detect_content_type(const std::string& content_type) {
 
 void
 SCgiTask::receive_call(const char* buffer, uint32_t length) {
-  assert(torrent::utils::Thread::self() == scgi_thread::thread());
+  assert(torrent::this_thread::thread() == scgi_thread::thread());
 
   RpcManager::RPCType rpc_type;
 
@@ -328,7 +362,7 @@ SCgiTask::receive_call(const char* buffer, uint32_t length) {
       m_result_mutex.lock();
       m_result_mutex.unlock();
 
-      scgi_thread::thread()->callback_interrupt_polling(this, [this]() {
+      scgi_thread::callback_interrupt(m_callback_id, [this]() {
           if (!is_open())
             return;
 
@@ -348,7 +382,7 @@ SCgiTask::receive_call(const char* buffer, uint32_t length) {
   m_result_mutex.lock();
   m_result_mutex.unlock();
 
-  torrent::main_thread::thread()->callback_interrupt_polling(this, [this, rpc_type, buffer, length, result_callback]() {
+  torrent::main_thread::callback_interrupt(m_callback_id, [this, rpc_type, buffer, length, result_callback]() {
       // Memory barrier for the input data.
       // std::atomic_thread_fence(std::memory_order_acquire);
       m_result_mutex.lock();
@@ -363,9 +397,9 @@ SCgiTask::receive_call(const char* buffer, uint32_t length) {
 
 void
 SCgiTask::receive_write(const char* buffer, uint32_t length) {
-  assert(torrent::utils::Thread::self() == torrent::main_thread::thread());
+  assert(torrent::this_thread::thread() == torrent::main_thread::thread());
 
-  if (buffer == nullptr || length > (100 << 20))
+  if (buffer == nullptr || length > max_response_size)
     throw torrent::internal_error("SCgiTask::receive_write(...) received bad input.");
 
   // Main thread callback already locked this mutex.

@@ -1,48 +1,3 @@
-AC_DEFUN([TORRENT_CHECK_XFS], [
-  AC_MSG_CHECKING(for XFS support)
-
-  AC_COMPILE_IFELSE([AC_LANG_SOURCE([
-      #include <xfs/libxfs.h>
-      #include <sys/ioctl.h>
-      int main() {
-        struct xfs_flock64 l;
-        ioctl(0, XFS_IOC_RESVSP64, &l);
-        return 0;
-      }
-      ])],
-    [
-      AC_DEFINE(USE_XFS, 1, Use XFS filesystem stuff.)
-      AC_MSG_RESULT(yes)
-    ], [
-      AC_MSG_RESULT(no)
-    ])
-])
-
-
-AC_DEFUN([TORRENT_WITHOUT_XFS], [
-  AC_ARG_WITH(xfs,
-    AS_HELP_STRING([--without-xfs],[do not check for XFS filesystem support]),
-    [
-       if test "$withval" = "yes"; then
-        TORRENT_CHECK_XFS
-      fi
-    ], [
-        TORRENT_CHECK_XFS
-    ])
-])
-
-
-AC_DEFUN([TORRENT_WITH_XFS], [
-  AC_ARG_WITH(xfs,
-    AS_HELP_STRING([--with-xfs],[check for XFS filesystem support]),
-    [
-      if test "$withval" = "yes"; then
-        TORRENT_CHECK_XFS
-      fi
-    ])
-])
-
-
 AC_DEFUN([TORRENT_CHECK_EPOLL], [
   AC_MSG_CHECKING(for epoll support)
 
@@ -54,6 +9,8 @@ AC_DEFUN([TORRENT_CHECK_EPOLL], [
       }
       ])],
     [
+      use_epoll=yes
+
       AC_DEFINE(USE_EPOLL, 1, Use epoll.)
       AC_MSG_RESULT(yes)
     ], [
@@ -86,6 +43,8 @@ AC_DEFUN([TORRENT_CHECK_KQUEUE], [
       }
       ])],
     [
+      use_kqueue=yes
+
       AC_DEFINE(USE_KQUEUE, 1, Use kqueue.)
       AC_MSG_RESULT(yes)
     ], [
@@ -118,48 +77,9 @@ AC_DEFUN([TORRENT_WITHOUT_KQUEUE], [
 ])
 
 
-AC_DEFUN([TORRENT_CHECK_FALLOCATE], [
-  AC_MSG_CHECKING(for fallocate)
-
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[#define _GNU_SOURCE
-               #include <fcntl.h>
-              ]], [[ fallocate(0, FALLOC_FL_KEEP_SIZE, 0, 0); return 0;
-              ]])],[
-      AC_DEFINE(HAVE_FALLOCATE, 1, Linux's fallocate supported.)
-      AC_MSG_RESULT(yes)
-    ],[
-      AC_MSG_RESULT(no)
-    ])
-])
-
-
-AC_DEFUN([TORRENT_CHECK_POSIX_FALLOCATE], [
-  AC_MSG_CHECKING(for posix_fallocate)
-
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <fcntl.h>
-              ]], [[ posix_fallocate(0, 0, 0);
-              ]])],[
-      AC_DEFINE(USE_POSIX_FALLOCATE, 1, posix_fallocate supported.)
-      AC_MSG_RESULT(yes)
-    ],[
-      AC_MSG_RESULT(no)
-    ])
-])
-
-
-AC_DEFUN([TORRENT_WITH_POSIX_FALLOCATE], [
-  AC_ARG_WITH(posix-fallocate,
-    AS_HELP_STRING([--with-posix-fallocate],[check for and use posix_fallocate to allocate files]),
-    [
-      if test "$withval" = "yes"; then
-        TORRENT_CHECK_POSIX_FALLOCATE
-      fi
-    ])
-])
-
 AC_DEFUN([TORRENT_WITH_ADDRESS_SPACE], [
   AC_ARG_WITH(address-space,
-    AS_HELP_STRING([--with-address-space=MB],[change the default address space size [[default=1024mb]]]),
+    AS_HELP_STRING([--with-address-space=MB],[change the default address space size [default=1024mb-or-32768mb]]),
     [
       if test ! -z $withval -a "$withval" != "yes" -a "$withval" != "no"; then
         AC_DEFINE_UNQUOTED(DEFAULT_ADDRESS_SPACE_SIZE, [$withval])
@@ -171,51 +91,53 @@ AC_DEFUN([TORRENT_WITH_ADDRESS_SPACE], [
       AC_CHECK_SIZEOF(long)
 
       if test $ac_cv_sizeof_long = 8; then
-        AC_DEFINE(DEFAULT_ADDRESS_SPACE_SIZE, 4096, Default address space size.)
+        AC_DEFINE(DEFAULT_ADDRESS_SPACE_SIZE, 32768, Default address space size.)
       else
         AC_DEFINE(DEFAULT_ADDRESS_SPACE_SIZE, 1024, Default address space size.)
       fi
     ])
 ])
 
-AC_DEFUN([TORRENT_WITH_FASTCGI], [
-  AC_ARG_WITH(fastcgi,
-    AS_HELP_STRING([--with-fastcgi=PATH],[enable FastCGI RPC support (DO NOT USE)]),
+
+# The atomic is global and modified with a read-modify-write operation,
+# otherwise the compiler can optimize the operations away and the program
+# links without libatomic even on targets that need it.
+AC_DEFUN([TORRENT_CHECK_ATOMIC], [
+  AC_MSG_CHECKING([whether 64-bit atomic operations require -latomic])
+  AC_LANG_PUSH(C++)
+
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <cstdint>
+                                    #include <atomic>
+                                    std::atomic<uint64_t> x(0);]],
+                                    [[x.fetch_add(1);
+                                    return x.load();]])],
     [
-      AC_MSG_CHECKING([for FastCGI (DO NOT USE)])
+      AC_MSG_RESULT([no])
+      ATOMIC_LIBS=""
+    ],
+    [
+      save_LIBS="$LIBS"
+      LIBS="$LIBS -latomic"
 
-      if test "$withval" = "no"; then
-        AC_MSG_RESULT(no)
-
-      elif test "$withval" = "yes"; then
-        CXXFLAGS="$CXXFLAGS"
-	LIBS="$LIBS -lfcgi"        
-
-        AC_LINK_IFELSE([AC_LANG_PROGRAM([[ #include <fcgiapp.h>
-        ]], [[ FCGX_Init(); ]])],[
-          AC_MSG_RESULT(ok)
-        ],[
-          AC_MSG_RESULT(not found)
-          AC_MSG_ERROR(Could not compile FastCGI test.)
+      AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <cstdint>
+                                        #include <atomic>
+                                        std::atomic<uint64_t> x(0);]],
+                                        [[x.fetch_add(1);
+                                        return x.load();]])],
+        [
+          AC_MSG_RESULT([yes])
+          ATOMIC_LIBS="-latomic"
+        ],
+        [
+          AC_MSG_RESULT([unsupported])
+          AC_MSG_ERROR([Compiler target lacks proper 64-bit atomic support.])
         ])
 
-        AC_DEFINE(HAVE_FASTCGI, 1, Support for FastCGI.)
-
-      else
-        CXXFLAGS="$CXXFLAGS -I$withval/include"
-	LIBS="$LIBS -lfcgi -L$withval/lib"
-
-        AC_LINK_IFELSE([AC_LANG_PROGRAM([[ #include <fcgiapp.h>
-        ]], [[ FCGX_Init(); ]])],[
-          AC_MSG_RESULT(ok)
-        ],[
-          AC_MSG_RESULT(not found)
-          AC_MSG_ERROR(Could not compile FastCGI test.)
-        ])
-
-        AC_DEFINE(HAVE_FASTCGI, 1, Support for FastCGI.)
-      fi
+      LIBS="$save_LIBS"
     ])
+
+  AC_LANG_POP(C++)
+  AC_SUBST([ATOMIC_LIBS])
 ])
 
 
@@ -260,6 +182,7 @@ AC_DEFUN([TORRENT_WITH_XMLRPC_C], [
   ])
 ])
 
+
 AC_DEFUN([TORRENT_WITH_TINYXML2], [
   AC_MSG_CHECKING(for tinyxml2)
 
@@ -273,6 +196,7 @@ AC_DEFUN([TORRENT_WITH_TINYXML2], [
   ])
 ])
 
+
 AC_DEFUN([TORRENT_WITH_LUA], [
   AC_ARG_WITH(lua,
     AS_HELP_STRING([--with-lua],[enable LUA support]),
@@ -281,29 +205,45 @@ AC_DEFUN([TORRENT_WITH_LUA], [
       AC_MSG_RESULT(no)
     else
       AX_PROG_LUA
-      AX_LUA_LIBS
-      AX_LUA_HEADERS
-      AC_DEFINE(HAVE_LUA, 1, Use LUA.)
-      AC_DEFINE(LUA_DATADIR, [PACKAGE_DATADIR "/lua"], [LUA data directory])
-      LIBS="$LIBS $LUA_LIB"
-      CXXFLAGS="$CXXFLAGS $LUA_INCLUDE"
+
+      # 1. Override AX_LUA_LIBS default crash behavior 
+      AX_LUA_LIBS([have_lua_libs=yes], [have_lua_libs=no])
+
+      # 2. Override AX_LUA_HEADERS default crash behavior
+      AX_LUA_HEADERS([have_lua_headers=yes], [have_lua_headers=no])
+
+      # 3. Only inject if both checks completely pass
+      if test "x$have_lua_libs" = "xyes" && test "x$have_lua_headers" = "xyes"; then
+        AC_DEFINE(HAVE_LUA, 1, Use LUA.)
+        AC_DEFINE(LUA_DATADIR, [PACKAGE_DATADIR "/lua"], [LUA data directory])
+        LIBS="$LIBS $LUA_LIB"
+        CXXFLAGS="$CXXFLAGS $LUA_INCLUDE"
+      else
+        # Throw fatal error ONLY if user strictly ran --with-lua=yes
+        if test "$withval" = "yes"; then
+          AC_MSG_ERROR([Lua support explicitly requested, but compatible Lua 5.3 libs/headers were not found.])
+        else
+          AC_MSG_WARN([Lua 5.3 libs or headers missing. Proceeding without Lua support.])
+        fi
+      fi
     fi
   ],[
     AC_MSG_RESULT(ignored)
   ])
 ])
 
+
 AC_DEFUN([TORRENT_WITH_INOTIFY], [
   AC_LANG_PUSH(C++)
 
-  AC_CHECK_HEADERS([sys/inotify.h mcheck.h])
+  AC_CHECK_HEADERS([sys/inotify.h])
   AC_MSG_CHECKING([whether sys/inotify.h actually works])
 
   AC_COMPILE_IFELSE([AC_LANG_SOURCE([
       #include <sys/inotify.h>
       int main(int,const char**) { return (-1 == inotify_init()); }])
     ],[
-     AC_DEFINE(HAVE_INOTIFY, 1, [sys/inotify.h exists and works correctly])
+     AC_DEFINE(USE_INOTIFY, 1, [sys/inotify.h exists and works correctly])
      AC_MSG_RESULT(yes)],
     [AC_MSG_RESULT(failed)]
   )
@@ -311,12 +251,14 @@ AC_DEFUN([TORRENT_WITH_INOTIFY], [
   AC_LANG_POP(C++)
 ])
 
+
 AC_DEFUN([TORRENT_CHECK_PTHREAD_SETNAME_NP], [
   AC_CHECK_HEADERS(pthread.h)
 
   AC_MSG_CHECKING(for pthread_setname_np type)
 
   AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+    #define _GNU_SOURCE
     #include <pthread.h>
     #include <sys/types.h>
   ]], [[
@@ -341,6 +283,7 @@ AC_DEFUN([TORRENT_CHECK_PTHREAD_SETNAME_NP], [
   ])
 ])
 
+
 AC_DEFUN([TORRENT_DISABLE_PTHREAD_SETNAME_NP], [
   AC_MSG_CHECKING([for pthread_setname_no])
 
@@ -360,6 +303,24 @@ AC_DEFUN([TORRENT_DISABLE_PTHREAD_SETNAME_NP], [
 ])
 
 
+AC_DEFUN([TORRENT_CHECK_POSIX_SPAWN_ADDCLOSEFROM_NP], [
+  AC_MSG_CHECKING(for posix_spawn_file_actions_addclosefrom_np)
+
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+    #define _GNU_SOURCE
+    #include <spawn.h>
+  ]], [[
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_addclosefrom_np(&actions, 3);
+  ]])],[
+    AC_DEFINE(HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCLOSEFROM_NP, 1, [Define if posix_spawn_file_actions_addclosefrom_np is available.])
+    AC_MSG_RESULT(yes)
+  ],[
+    AC_MSG_RESULT(no)
+  ])
+])
+
+
 AC_DEFUN([TORRENT_WITH_SYSTEMD], [
   AC_ARG_WITH(systemd,
     AS_HELP_STRING([--with-systemd],[enable systemd socket activation support [[default=no]]]),
@@ -374,4 +335,21 @@ AC_DEFUN([TORRENT_WITH_SYSTEMD], [
           [AC_MSG_ERROR([libsystemd not found. Install libsystemd-dev (or the equivalent for your distribution).])])
       fi
     ])
+])
+
+
+AC_DEFUN([TORRENT_WITHOUT_NCURSES], [
+  AC_ARG_WITH([ncurses],
+    [AS_HELP_STRING([--without-ncurses], [build without ncurses (daemon-only mode)])],
+    [with_ncurses=$withval],
+    [with_ncurses=yes])
+
+  if test "x$with_ncurses" = xno; then
+    AC_DEFINE([HAVE_NO_NCURSES], [1], [Define to 1 if building without ncurses])
+    CURSES_LIBS=""
+    CURSES_CFLAGS=""
+    CURSES_LIB=""
+  fi
+
+  AM_CONDITIONAL([NO_NCURSES], [test "x$with_ncurses" = xno])
 ])

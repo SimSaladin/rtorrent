@@ -17,7 +17,7 @@ namespace rpc {
 
 struct object_storage_node {
   torrent::Object object;
-  char            flags;
+  unsigned int    flags;
 };
 
 typedef std::unordered_map<fixed_key_type<64>, object_storage_node, hash_fixed_key_type> object_storage_base_type;
@@ -158,14 +158,7 @@ fixed_key_type<MaxSize>::set_data(const value_type* src_data, size_type src_size
 
 template <size_t MaxSize> inline void
 fixed_key_type<MaxSize>::set_c_str(const value_type* src_data) {
-  value_type* itr = m_data;
-  const value_type* last = m_data + max_size;
-
-  while (itr != last && *src_data != '\0')
-    *itr++ = *src_data++;
-
-  *itr = '\0';
-  m_size = std::distance(m_data, itr);
+  set_c_str(src_data, std::strlen(src_data));
 }
 
 template <size_t MaxSize> inline void

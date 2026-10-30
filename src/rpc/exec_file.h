@@ -3,12 +3,14 @@
 
 #include <torrent/object.h>
 
+#include "utils/waitpid_queue.h"
+
 namespace rpc {
 
 class ExecFile {
 public:
   static constexpr unsigned int max_args    = 128;
-  static constexpr unsigned int buffer_size = 4096;
+  static constexpr unsigned int buffer_size = 128 * 1024;
 
   static constexpr int flag_expand_tilde = 0x1;
   static constexpr int flag_throw        = 0x2;
@@ -24,6 +26,8 @@ public:
 private:
   int                 m_log_fd{-1};
   std::string         m_capture;
+
+  utils::WaitpidQueue m_waitpid_queue;
 };
 
 }
