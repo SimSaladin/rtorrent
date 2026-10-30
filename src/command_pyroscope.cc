@@ -1001,22 +1001,22 @@ void initialize_command_pyroscope() {
 
     // string.* group
     CMD2_ANY_LIST("string.len",         &cmd_string_len);
-    CMD2_ANY_LIST("string.join",        &cmd_string_join);
-    CMD2_ANY_LIST("string.split",       &cmd_string_split);
+    //CMD2_ANY_LIST("string.join",        &cmd_string_join);
+    //CMD2_ANY_LIST("string.split",       &cmd_string_split);
     //CMD2_ANY_LIST("string.substr",      &cmd_string_substr);
     CMD2_ANY_LIST("string.shorten",     &cmd_string_shorten);
-    CMD2_ANY_LIST("string.contains",    &cmd_string_contains);
-    CMD2_ANY_LIST("string.contains_i",  &cmd_string_contains_i);
-    CMD2_ANY_LIST("string.map",         &cmd_string_map);
-    CMD2_ANY_LIST("string.replace",     &cmd_string_replace);
-    CMD2_ANY_LIST("string.equals",      std::bind(&cmd_string_compare, 0, std::placeholders::_2));
+    //CMD2_ANY_LIST("string.contains",    &cmd_string_contains);
+    //CMD2_ANY_LIST("string.contains_i",  &cmd_string_contains_i);
+    //CMD2_ANY_LIST("string.map",         &cmd_string_map);
+    //CMD2_ANY_LIST("string.replace",     &cmd_string_replace);
+    //CMD2_ANY_LIST("string.equals",      std::bind(&cmd_string_compare, 0, std::placeholders::_2));
     CMD2_ANY_LIST("string.startswith",  std::bind(&cmd_string_compare, 1, std::placeholders::_2));
     CMD2_ANY_LIST("string.endswith",    std::bind(&cmd_string_compare, 2, std::placeholders::_2));
-    CMD2_ANY_LIST("string.strip",       std::bind(&cmd_string_strip,  0, std::placeholders::_2));
-    CMD2_ANY_LIST("string.lstrip",      std::bind(&cmd_string_strip, -1, std::placeholders::_2));
-    CMD2_ANY_LIST("string.rstrip",      std::bind(&cmd_string_strip,  1, std::placeholders::_2));
-    CMD2_ANY_LIST("string.lpad",        std::bind(&cmd_string_pad, false, std::placeholders::_2));
-    CMD2_ANY_LIST("string.rpad",        std::bind(&cmd_string_pad, true,  std::placeholders::_2));
+    //CMD2_ANY_LIST("string.strip",       std::bind(&cmd_string_strip,  0, std::placeholders::_2));
+    //CMD2_ANY_LIST("string.lstrip",      std::bind(&cmd_string_strip, -1, std::placeholders::_2));
+    //CMD2_ANY_LIST("string.rstrip",      std::bind(&cmd_string_strip,  1, std::placeholders::_2));
+    //CMD2_ANY_LIST("string.lpad",        std::bind(&cmd_string_pad, false, std::placeholders::_2));
+    //CMD2_ANY_LIST("string.rpad",        std::bind(&cmd_string_pad, true,  std::placeholders::_2));
 
     // array.* group
     CMD2_ANY_LIST("array.at",           &cmd_array_at);
