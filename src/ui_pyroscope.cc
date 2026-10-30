@@ -447,7 +447,8 @@ torrent::Object cmd_d_tracker_alias(core::Download* download) {
 static void decorate_download_title(Window* window, display::Canvas* canvas, core::View* view,
                                     int pos, Range& range, int x_title, size_t hilite, size_t hilen) {
     int offset = row_offset(view, range);
-    core::Download* item = *range.first;
+    std::shared_ptr<core::Download> itemshr = *range.first;
+    core::Download* item = itemshr.get();
     bool active = item->is_open() && item->is_active();
 
     if (int(canvas->width()) <= x_title) return;
@@ -469,7 +470,8 @@ static void decorate_download_title(Window* window, display::Canvas* canvas, cor
 
     // show label for active tracker (a/k/a in focus tracker)
     if (int(canvas->width()) <= x_title + NAME_RESERVED_WIDTH + 3) return;
-    std::string url = get_active_tracker_alias(*range.first);
+    auto dl = *range.first;
+    std::string url = get_active_tracker_alias(dl.get());
     if (url.empty()) return;
 
     // shorten label if too long
@@ -859,7 +861,8 @@ bool ui_pyroscope_download_list_redraw(Window* window, display::Canvas* canvas, 
 
     pos = CANVAS_POS_1ST_ITEM;
     while (range.first != range.second) {
-        core::Download* d = *range.first;
+        std::shared_ptr<core::Download> dshr = *range.first;
+        core::Download* d = dshr.get();
         int offset = row_offset(view, range);
         int col_active = ps::COL_INFO;
 
@@ -876,11 +879,11 @@ bool ui_pyroscope_download_list_redraw(Window* window, display::Canvas* canvas, 
         if (int(canvas->width()) > column) {
             std::string displayname = get_custom_string(d, "displayname");
             canvas->print(column, pos, " %s",
-                u8_chop(displayname.empty() ? d->info()->name() : displayname.c_str(),
+                u8_chop(displayname.empty() ? d->info()->name().c_str() : displayname.c_str(),
                         canvas->width() - column - 1).c_str());
             size_t hilite = std::string::npos;
             if (!find_term.empty()) {
-                if (displayname.empty()) displayname = d->info()->name();
+                if (displayname.empty()) displayname = d->info()->name().c_str();
                 std::transform(displayname.begin(), displayname.end(), displayname.begin(), ::tolower);
                 hilite = displayname.find(find_term);
             }
@@ -902,10 +905,11 @@ bool ui_pyroscope_download_list_redraw(Window* window, display::Canvas* canvas, 
         char* last = buffer + canvas->width() + 1;
 
         pos = canvas->height() - 2 - network_history_lines;
-        print_download_info_full(buffer, last, *view->focus());
+        auto foc = *view->focus();
+        print_download_info_full(buffer, last, foc.get());
         canvas->print(3, pos, "%s", buffer);
         canvas->set_attr(0, pos, -1, canvas->attr_map().at(ps::COL_LABEL), ps::COL_LABEL);
-        print_download_status(buffer, last, *view->focus());
+        print_download_status(buffer, last, foc.get());
         canvas->print(3, pos+1, "%s", buffer);
         canvas->set_attr(0, pos+1, -1, canvas->attr_map().at(ps::COL_LABEL), ps::COL_LABEL);
     }
@@ -1098,8 +1102,9 @@ torrent::Object ui_find_next() {
 
             // In C++11, this can be done more efficiently using std::search;
             // we only use this interactively, so meh.
-            std::string name = get_custom_string(*itr, "displayname");
-            if (name.empty()) name = (*itr)->info()->name();
+            auto itrsh = *itr;
+            std::string name = get_custom_string(itrsh.get(), "displayname");
+            if (name.empty()) name = (*itr)->info()->name().c_str();
             std::transform(name.begin(), name.end(), name.begin(), ::tolower);
             found = name.find(term) != std::string::npos;
         } while (!found && itr != dl_view->focus());
