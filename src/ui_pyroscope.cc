@@ -1217,140 +1217,140 @@ void initialize_command_ui_pyroscope() {
     //    init_commands.append(cmdbuf);
     //}
 
-    //init_commands.append(
-    //    //// Multi-method to store column definitions
-    //    "method.insert = ui.column.render, multi|rlookup|static\n"
+    init_commands.append(
+        // Multi-method to store column definitions
+        "method.insert = ui.column.render, multi|rlookup|static\n"
 
-    //    // Toggle sacrificial columns manually (bound to '/' key)
-    //    "method.insert = ui.column.sacrificed.toggle, simple, \""
-    //        "branch = (ui.column.sacrificed), ((ui.column.sacrificed.set, 0)), ((ui.column.sacrificed.set, 1)) ; "
-    //        "branch = (ui.column.sacrificed),"
-    //        "   \\\"ui.column.show = (ui.column.sacrificial.list)\\\","
-    //        "   \\\"ui.column.hide = (ui.column.sacrificial.list)\\\" ; "
-    //        "ui.current_view.set = (ui.current_view)\"\n"
-    //    "schedule = column_sacrificed_toggle, 0, 0, ((ui.bind_key,download_list,/,ui.column.sacrificed.toggle=))\n"
+        // Toggle sacrificial columns manually (bound to '/' key)
+        "method.insert = ui.column.sacrificed.toggle, simple, \""
+            "branch = (ui.column.sacrificed), ((ui.column.sacrificed.set, 0)), ((ui.column.sacrificed.set, 1)) ; "
+            "branch = (ui.column.sacrificed),"
+            "   \\\"ui.column.show = (ui.column.sacrificial.list)\\\","
+            "   \\\"ui.column.hide = (ui.column.sacrificial.list)\\\" ; "
+            "ui.current_view.set = (ui.current_view)\"\n"
+        "schedule = column_sacrificed_toggle, 0, 0, ((ui.bind_key,download_list,/,ui.column.sacrificed.toggle=))\n"
 
-    //    // Bind '*' to toggle between collapsed and expanded display
-    //    "schedule = collapsed_view_toggle, 0, 0, ((ui.bind_key, download_list, *, \""
-    //        "view.collapsed.toggle= ; ui.current_view.set = (ui.current_view)\"))\n"
+        // Bind '*' to toggle between collapsed and expanded display
+        "schedule = collapsed_view_toggle, 0, 0, ((ui.bind_key, download_list, *, \""
+            "view.collapsed.toggle= ; ui.current_view.set = (ui.current_view)\"))\n"
 
-    //    // Bind 'F' / F3 to find the next item for 'ui.find.term'
-    //    "schedule = ui_find_next_f,  0, 0, ((ui.bind_key, download_list, F,    \"ui.find.next=\"))\n"
-    //    "schedule = ui_find_next_f3, 0, 0, ((ui.bind_key, download_list, 0413, \"ui.find.next=\"))\n"
+        // Bind 'F' / F3 to find the next item for 'ui.find.term'
+        "schedule = ui_find_next_f,  0, 0, ((ui.bind_key, download_list, F,    \"ui.find.next=\"))\n"
+        "schedule = ui_find_next_f3, 0, 0, ((ui.bind_key, download_list, 0413, \"ui.find.next=\"))\n"
 
-    //    // Collapse built-in views
-    //    "view.collapsed.toggle = main\n"
-    //    "view.collapsed.toggle = name\n"
-    //    "view.collapsed.toggle = started\n"
-    //    "view.collapsed.toggle = stopped\n"
-    //    "view.collapsed.toggle = complete\n"
-    //    "view.collapsed.toggle = incomplete\n"
-    //    "view.collapsed.toggle = hashing\n"
-    //    "view.collapsed.toggle = seeding\n"
-    //    "view.collapsed.toggle = leeching\n"
-    //    "view.collapsed.toggle = active\n"
+        // Collapse built-in views
+        "view.collapsed.toggle = main\n"
+        "view.collapsed.toggle = name\n"
+        "view.collapsed.toggle = started\n"
+        "view.collapsed.toggle = stopped\n"
+        "view.collapsed.toggle = complete\n"
+        "view.collapsed.toggle = incomplete\n"
+        "view.collapsed.toggle = hashing\n"
+        "view.collapsed.toggle = seeding\n"
+        "view.collapsed.toggle = leeching\n"
+        "view.collapsed.toggle = active\n"
 
-    //    // TODO: copy (parts of) timestamp cfg here (~/.pyroscope/rtorrent.d/timestamps.rc)
-    //    //       Do NOT move it, since then rT vanilla gets unusable with rtcontrol.
-    //    //       'system.has' allows to have both.
+        // TODO: copy (parts of) timestamp cfg here (~/.pyroscope/rtorrent.d/timestamps.rc)
+        //       Do NOT move it, since then rT vanilla gets unusable with rtcontrol.
+        //       'system.has' allows to have both.
 
-    //    //  1:    COL_CUSTOM1
-    //    //  …
-    //    //  9:    COL_CUSTOM9
-    //    // 10:    COL_PROGRESS0
-    //    // 11:    COL_PROGRESS20
-    //    // 12:    COL_PROGRESS40
-    //    // 13:    COL_PROGRESS60
-    //    // 14:    COL_PROGRESS80
-    //    // 15:    COL_PROGRESS100
-    //    // 16:    COL_PROGRESS120
-    //    // 17:    COL_TITLE
-    //    // 18:    COL_FOOTER
-    //    // 19:    COL_FOCUS
-    //    // 20:    COL_LABEL
-    //    // 21:    COL_INFO
-    //    // 22:    COL_ALARM
-    //    // 23:    COL_COMPLETE
-    //    // 24:    COL_SEEDING
-    //    // 25:    COL_STOPPED
-    //    // 26:    COL_QUEUED
-    //    // 27:    COL_INCOMPLETE
-    //    // 28:    COL_LEECHING
-    //    // 29:    COL_ODD
-    //    // 30:    COL_EVEN
+        //  1:    COL_CUSTOM1
+        //  …
+        //  9:    COL_CUSTOM9
+        // 10:    COL_PROGRESS0
+        // 11:    COL_PROGRESS20
+        // 12:    COL_PROGRESS40
+        // 13:    COL_PROGRESS60
+        // 14:    COL_PROGRESS80
+        // 15:    COL_PROGRESS100
+        // 16:    COL_PROGRESS120
+        // 17:    COL_TITLE
+        // 18:    COL_FOOTER
+        // 19:    COL_FOCUS
+        // 20:    COL_LABEL
+        // 21:    COL_INFO
+        // 22:    COL_ALARM
+        // 23:    COL_COMPLETE
+        // 24:    COL_SEEDING
+        // 25:    COL_STOPPED
+        // 26:    COL_QUEUED
+        // 27:    COL_INCOMPLETE
+        // 28:    COL_LEECHING
+        // 29:    COL_ODD
+        // 30:    COL_EVEN
 
-    //    // 90:    COL_DOWN_TIME
-    //    // 91:    COL_PRIO
-    //    // 92:    COL_STATE
-    //    // 93:    COL_RATIO
-    //    // 94:    COL_PROGRESS
-    //    // 95:    COL_ALERT
-    //    // 96:    COL_UP_TIME
+        // 90:    COL_DOWN_TIME
+        // 91:    COL_PRIO
+        // 92:    COL_STATE
+        // 93:    COL_RATIO
+        // 94:    COL_PROGRESS
+        // 95:    COL_ALERT
+        // 96:    COL_UP_TIME
 
-    //    // Status flags (❢ ☢ ☍ ⌘)
-    //    "method.set_key = ui.column.render, \"100:3C95/2:❢  \","
-    //    "    ((array.at, {\"  \", \"♺ \", \"ʘ \", \"⚠ \", \"◔ \", \"⚡ \", \"↯ \", \"¿?\","
-    //                    " \"⨂ \", \"⋫ \", \"☡ \"}, ((d.message.alert)) ))\n"
-    //    "method.set_key = ui.column.render, \"110:2C92/2:☢ \","
-    //    "    ((string.map, ((cat, ((d.is_open)), ((d.is_active)))), {00, \"▪ \"}, {01, \"▪ \"}, {10, \"╍ \"}, {11, \"▹ \"}))\n"
-    //    "method.set_key = ui.column.render, \"120:?2:☍ \","
-    //    "    ((array.at, {\"⚯ \", \"  \"}, ((not, ((d.tied_to_file)) )) ))\n"
-    //    "method.set_key = ui.column.render, \"130:?2:⌘ \","
-    //    "    ((array.at, {\"⚒ \", \"◌ \"}, ((d.ignore_commands)) ))\n"
+        // Status flags (❢ ☢ ☍ ⌘)
+        "method.set_key = ui.column.render, \"100:3C95/2:❢  \","
+        "    ((array.at, {\"  \", \"♺ \", \"ʘ \", \"⚠ \", \"◔ \", \"⚡ \", \"↯ \", \"¿?\","
+                        " \"⨂ \", \"⋫ \", \"☡ \"}, ((d.message.alert)) ))\n"
+        "method.set_key = ui.column.render, \"110:2C92/2:☢ \","
+        "    ((string.map, ((cat, ((d.is_open)), ((d.is_active)))), {00, \"▪ \"}, {01, \"▪ \"}, {10, \"╍ \"}, {11, \"▹ \"}))\n"
+        "method.set_key = ui.column.render, \"120:?2:☍ \","
+        "    ((array.at, {\"⚯ \", \"  \"}, ((not, ((d.tied_to_file)) )) ))\n"
+        "method.set_key = ui.column.render, \"130:?2:⌘ \","
+        "    ((array.at, {\"⚒ \", \"◌ \"}, ((d.ignore_commands)) ))\n"
 
-    //    // Scrape info (↺ ⤴ ⤵)
-    //    "method.set_key = ui.column.render, \"400:?3C23/3: ↺ \", ((convert.magnitude, ((d.tracker_scrape.downloaded)) ))\n"
-    //    "method.set_key = ui.column.render, \"410:?3C24/3: ⤴ \", ((convert.magnitude, ((d.tracker_scrape.complete)) ))\n"
-    //    "method.set_key = ui.column.render, \"420:?3C14/3: ⤵ \", ((convert.magnitude, ((d.tracker_scrape.incomplete)) ))\n"
+        // Scrape info (↺ ⤴ ⤵)
+        "method.set_key = ui.column.render, \"400:?3C23/3: ↺ \", ((convert.magnitude, ((d.tracker_scrape.downloaded)) ))\n"
+        "method.set_key = ui.column.render, \"410:?3C24/3: ⤴ \", ((convert.magnitude, ((d.tracker_scrape.complete)) ))\n"
+        "method.set_key = ui.column.render, \"420:?3C14/3: ⤵ \", ((convert.magnitude, ((d.tracker_scrape.incomplete)) ))\n"
 
-    //    // Traffic indicator (⚡)
-    //    "method.set_key = ui.column.render, \"500:?2:↕ \","
-    //    "    ((string.map, ((cat, ((not, ((d.up.rate)) )), ((not, ((d.down.rate)) )) )),"
-    //    "                  {00, \"⇅ \"}, {01, \"↟ \"}, {10, \"↡ \"}, {11, \"  \"} ))\n"
+        // Traffic indicator (⚡)
+        "method.set_key = ui.column.render, \"500:?2:↕ \","
+        "    ((string.map, ((cat, ((not, ((d.up.rate)) )), ((not, ((d.down.rate)) )) )),"
+        "                  {00, \"⇅ \"}, {01, \"↟ \"}, {10, \"↡ \"}, {11, \"  \"} ))\n"
 
-    //    // Number of connected peers (℞)
-    //    "method.set_key = ui.column.render, \"510:3C28/3:℞  \", ((convert.magnitude, ((d.peers_connected)) ))\n"
+        // Number of connected peers (℞)
+        "method.set_key = ui.column.render, \"510:3C28/3:℞  \", ((convert.magnitude, ((d.peers_connected)) ))\n"
 
-    //    // Up|Leech Time / Down|Completion or Loaded Time
-    //    // TODO: Could use "d.timestamp.started" and "d.timestamp.finished" here, but need to check
-    //    //       when they were introduced, and if they're always set (e.g. what about fast-resumed items?)
-    //    "method.set_key = ui.column.render, \"520:6C96/6:∆⋮ ⟲  \","
-    //    "    ((if, ((d.up.rate)),"
-    //    "        ((convert.human_size, ((d.up.rate)), ((value, 10)) )),"
-    //    "        ((convert.time_delta, ((value, ((d.custom, tm_completed)) )),"
-    //    "                              ((value, ((d.custom.if_z, tm_started, ((d.custom, tm_loaded)) )) )) ))"
-    //    "    ))\n"
-    //    "method.set_key = ui.column.render, \"530:6C90/6:∇⋮ ◷  \","
-    //    "    ((if, ((d.down.rate)),"
-    //    "        ((convert.human_size, ((d.down.rate)), ((value, 10)) )),"
-    //    "        ((convert.time_delta, ((value, ((d.custom.if_z, tm_completed, ((d.custom, tm_loaded)) )) )) ))"
-    //    "    ))\n"
+        // Up|Leech Time / Down|Completion or Loaded Time
+        // TODO: Could use "d.timestamp.started" and "d.timestamp.finished" here, but need to check
+        //       when they were introduced, and if they're always set (e.g. what about fast-resumed items?)
+        "method.set_key = ui.column.render, \"520:6C96/6:∆⋮ ⟲  \","
+        "    ((if, ((d.up.rate)),"
+        "        ((convert.human_size, ((d.up.rate)), ((value, 10)) )),"
+        "        ((convert.time_delta, ((value, ((d.custom, tm_completed)) )),"
+        "                              ((value, ((d.custom.if_z, tm_started, ((d.custom, tm_loaded)) )) )) ))"
+        "    ))\n"
+        "method.set_key = ui.column.render, \"530:6C90/6:∇⋮ ◷  \","
+        "    ((if, ((d.down.rate)),"
+        "        ((convert.human_size, ((d.down.rate)), ((value, 10)) )),"
+        "        ((convert.time_delta, ((value, ((d.custom.if_z, tm_completed, ((d.custom, tm_loaded)) )) )) ))"
+        "    ))\n"
 
-    //    // Upload total, progress, ratio, and data size
-    //    "method.set_key = ui.column.render, \"900:?5C24/3C21/2: Σ⇈  \","
-    //    "    ((if, ((d.up.total)),"
-    //    "        ((convert.human_size, ((d.up.total)), (value, 10))),"
-    //    "        ((cat, \"  ⋅ \"))"
-    //    "    ))\n"
-    //    "method.set_key = ui.column.render, \"910:2C94/2:⣿ \","
-    //    "    ((string.substr, \"  ⠁ ⠉ ⠋ ⠛ ⠟ ⠿ ⡿ ⣿ ❚ \", ((math.mul, 2, "
-    //    "                     ((math.div, ((math.mul, ((d.completed_chunks)), 10)), ((d.size_chunks)) )) )), 2, \"✔ \"))\n"
-    //    // "  ⠁ ⠉ ⠋ ⠛ ⠟ ⠿ ⡿ ⣿ ❚ "
-    //    //⠀"  ▁ ▂ ▃ ▄ ▅ ▆ ▇ █ "
-    //    "method.set_key = ui.column.render, \"920:3C93/3:☯  \","
-    //    "    ((string.substr, \"☹ ➀ ➁ ➂ ➃ ➄ ➅ ➆ ➇ ➈ ➉ \", ((math.mul, 2, ((math.div, ((d.ratio)), 1000)) )), 2, \"⊛ \"))\n"
-    //    // "☹ ➀ ➁ ➂ ➃ ➄ ➅ ➆ ➇ ➈ ➉ " "😇 "
-    //    // "☹ ① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ "
-    //    // "☹ ➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓ "
-    //    "method.set_key = ui.column.render, \"930:5C15/3C21/2: ⛁   \","
-    //    "    ((convert.human_size, ((d.size_bytes)) ))\n"
+        // Upload total, progress, ratio, and data size
+        "method.set_key = ui.column.render, \"900:?5C24/3C21/2: Σ⇈  \","
+        "    ((if, ((d.up.total)),"
+        "        ((convert.human_size, ((d.up.total)), (value, 10))),"
+        "        ((cat, \"  ⋅ \"))"
+        "    ))\n"
+        "method.set_key = ui.column.render, \"910:2C94/2:⣿ \","
+        "    ((string.substr, \"  ⠁ ⠉ ⠋ ⠛ ⠟ ⠿ ⡿ ⣿ ❚ \", ((math.mul, 2, "
+        "                     ((math.div, ((math.mul, ((d.completed_chunks)), 10)), ((d.size_chunks)) )) )), 2, \"✔ \"))\n"
+        // "  ⠁ ⠉ ⠋ ⠛ ⠟ ⠿ ⡿ ⣿ ❚ "
+        //⠀"  ▁ ▂ ▃ ▄ ▅ ▆ ▇ █ "
+        "method.set_key = ui.column.render, \"920:3C93/3:☯  \","
+        "    ((string.substr, \"☹ ➀ ➁ ➂ ➃ ➄ ➅ ➆ ➇ ➈ ➉ \", ((math.mul, 2, ((math.div, ((d.ratio)), 1000)) )), 2, \"⊛ \"))\n"
+        // "☹ ➀ ➁ ➂ ➃ ➄ ➅ ➆ ➇ ➈ ➉ " "😇 "
+        // "☹ ① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩ "
+        // "☹ ➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓ "
+        "method.set_key = ui.column.render, \"930:5C15/3C21/2: ⛁   \","
+        "    ((convert.human_size, ((d.size_bytes)) ))\n"
 
-    //    // Explicitly managed status (✰ = prio; ⚑ = tagged)
-    //    "method.set_key = ui.column.render, \"970:2C91/2:✰ \","
-    //    "    ((array.at, {\"✖ \", \"⇣ \", \"  \", \"⇡ \"}, ((d.priority)) ))\n"
-    //    "method.set_key = ui.column.render, \"980:2C16/2:⚑ \","
-    //    "    ((array.at, {\"  \", \"⚑ \"}, ((d.views.has, tagged)) ))\n"
-    //);
+        // Explicitly managed status (✰ = prio; ⚑ = tagged)
+        "method.set_key = ui.column.render, \"970:2C91/2:✰ \","
+        "    ((array.at, {\"✖ \", \"⇣ \", \"  \", \"⇡ \"}, ((d.priority)) ))\n"
+        "method.set_key = ui.column.render, \"980:2C16/2:⚑ \","
+        "    ((array.at, {\"  \", \"⚑ \"}, ((d.views.has, tagged)) ))\n"
+    );
 
     //printf("%s", init_commands.c_str());
     rpc::parse_command_multiple(rpc::make_target(), init_commands.c_str());

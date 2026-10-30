@@ -24,7 +24,7 @@ CommandMap::insert(const key_type& key, int flags, const char* parm, const char*
   iterator itr = base_type::find(key);
 
   if (itr != base_type::end())
-    throw torrent::internal_error("CommandMap::insert(...) tried to insert an already existing key.");
+    throw torrent::internal_error("CommandMap::insert(...) tried to insert an already existing key: " + std::string(key));
 
   // TODO: This is not honoring the public_xmlrpc flags!!!
   if (rpc::rpc.is_handlers_initialized() && (flags & flag_public_rpc))
