@@ -1228,15 +1228,15 @@ void initialize_command_ui_pyroscope() {
             "   \\\"ui.column.show = (ui.column.sacrificial.list)\\\","
             "   \\\"ui.column.hide = (ui.column.sacrificial.list)\\\" ; "
             "ui.current_view.set = (ui.current_view)\"\n"
-        "schedule2 = column_sacrificed_toggle, 0, 0, ((ui.bind_key,download_list,/,ui.column.sacrificed.toggle=))\n"
+        "schedule = column_sacrificed_toggle, 0, 0, ((ui.bind_key,download_list,/,ui.column.sacrificed.toggle=))\n"
 
         // Bind '*' to toggle between collapsed and expanded display
-        "schedule2 = collapsed_view_toggle, 0, 0, ((ui.bind_key, download_list, *, \""
+        "schedule = collapsed_view_toggle, 0, 0, ((ui.bind_key, download_list, *, \""
             "view.collapsed.toggle= ; ui.current_view.set = (ui.current_view)\"))\n"
 
         // Bind 'F' / F3 to find the next item for 'ui.find.term'
-        "schedule2 = ui_find_next_f,  0, 0, ((ui.bind_key, download_list, F,    \"ui.find.next=\"))\n"
-        "schedule2 = ui_find_next_f3, 0, 0, ((ui.bind_key, download_list, 0413, \"ui.find.next=\"))\n"
+        "schedule = ui_find_next_f,  0, 0, ((ui.bind_key, download_list, F,    \"ui.find.next=\"))\n"
+        "schedule = ui_find_next_f3, 0, 0, ((ui.bind_key, download_list, 0413, \"ui.find.next=\"))\n"
 
         // Collapse built-in views
         "view.collapsed.toggle = main\n"
