@@ -1003,7 +1003,7 @@ void initialize_command_pyroscope() {
     CMD2_ANY_LIST("string.len",         &cmd_string_len);
     CMD2_ANY_LIST("string.join",        &cmd_string_join);
     CMD2_ANY_LIST("string.split",       &cmd_string_split);
-    CMD2_ANY_LIST("string.substr",      &cmd_string_substr);
+    //CMD2_ANY_LIST("string.substr",      &cmd_string_substr);
     CMD2_ANY_LIST("string.shorten",     &cmd_string_shorten);
     CMD2_ANY_LIST("string.contains",    &cmd_string_contains);
     CMD2_ANY_LIST("string.contains_i",  &cmd_string_contains_i);
