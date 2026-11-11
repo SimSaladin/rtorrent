@@ -91,7 +91,7 @@ parse_command(target_type target, const char* first, const char* last) {
   first = std::find_if(first, last, [&](char c) { return !command_map_is_space(c); });
 
   if (first == last || *first == '#')
-    return std::make_pair(torrent::Object(), first);
+    return std::make_pair(torrent::Object::create_empty(torrent::Object::TYPE_NONE), first);
 
   char key[128];
 
@@ -223,6 +223,7 @@ parse_command_file(const std::string& path) {
     }
 
   } catch (torrent::input_error& e) {
+    if (!strcmp(e.what(), "import.return")) return true;
     snprintf(buffer, 2048, "Error in option file: %s:%u: %s", path.c_str(), lineNumber, e.what());
 
     throw torrent::input_error(buffer);
