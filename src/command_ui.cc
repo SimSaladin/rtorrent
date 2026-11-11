@@ -588,7 +588,13 @@ cmd_ui_set_view(const torrent::Object::string_type& args) {
 
 torrent::Object
 cmd_ui_current_view() {
-  return control->ui()->download_list()->current_view()->name();
+  // might not yet be initialized
+  auto download_list = control->ui()->download_list().get();
+  if (download_list == nullptr) {
+      return torrent::Object();
+  } else {
+    return download_list->current_view()->name();
+  }
 }
 
 torrent::Object

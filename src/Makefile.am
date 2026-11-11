@@ -32,6 +32,7 @@ libsub_root_a_SOURCES = \
 	display/manager.h \
 	display/utils.cc \
 	display/utils.h \
+	ui_pyroscope.cc \
 	display/text_element.h \
 	display/text_element_list.cc \
 	display/text_element_list.h \
@@ -195,6 +196,7 @@ libsub_root_a_SOURCES = \
 	command_string.cc \
 	command_system.cc \
 	command_ui.cc \
+	command_pyroscope.cc \
 	control.cc \
 	control.h \
 	globals.cc \
