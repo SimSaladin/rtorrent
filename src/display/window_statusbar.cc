@@ -33,8 +33,6 @@ WindowStatusbar::redraw() {
 
   m_canvas->set_attr(0, 0, -1, RCOLOR_FOOTER);
 
-  void ui_pyroscope_statusbar_redraw(Window* window, display::Canvas* canvas);
-  ui_pyroscope_statusbar_redraw(this, m_canvas.get());
   m_lastTick = control->tick();
 }
 

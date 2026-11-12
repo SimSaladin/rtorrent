@@ -19,7 +19,6 @@
 #include "globals.h"
 
 #include <cstdio>
-#include <climits>
 #include <ctime>
 #include <cwchar>
 #include <set>
@@ -27,11 +26,9 @@
 #include <unistd.h>
 #include <optional>
 #include <fcntl.h>
-#include "utils/functional.h"
 
 #include "core/download.h"
 #include "core/manager.h"
-#include "core/view_manager.h"
 #include "rpc/parse.h"
 #include <torrent/tracker/tracker.h>
 #include "ui/root.h"
@@ -97,7 +94,7 @@ strlcpy(char *dest, const char *src, size_t size) {
 inline char*
 path_expand(const char* src, char* first, char* last) {
   if (*src == '~') {
-    char* home = std::getenv("HOME");
+    const char* home = std::getenv("HOME");
 
     if (home == NULL)
       return first;
@@ -149,8 +146,8 @@ std::string get_active_tracker_domain(core::Download* download) {
         // snip url to domain name
         if (url.compare(0, 7, "http://")  == 0) url = url.substr(7);
         if (url.compare(0, 8, "https://") == 0) url = url.substr(8);
-        if (url.find('/') > 0) url = url.substr(0, url.find('/'));
-        if (url.find(':') > 0) url = url.substr(0, url.find(':'));
+        if (url.find('/') > 0) url.resize(url.find('/') + 1); // url = url.substr(0, url.find('/'));
+        if (url.find(':') > 0) url.resize(url.find(':') + 1); // url = url.substr(0, url.find(':'));
 
         // remove some common cruft
         const char* domain_cruft[] = {
@@ -206,8 +203,8 @@ static std::map<int, std::string> bound_commands[ui::DownloadList::DISPLAY_MAX_S
             # VIEW: Bind view #7 to the "rtcontrol" result
             schedule = bind_7,1,0,"ui.bind_key=download_list,7,ui.current_view.set=rtcontrol"
 */
-torrent::Object apply_ui_bind_key(rpc::target_type target, const torrent::Object& rawArgs) {
-    const torrent::Object::list_type& args = rawArgs.as_list();
+torrent::Object apply_ui_bind_key(rpc::target_type target, const torrent::Object& raw_args) {
+    const torrent::Object::list_type& args = raw_args.as_list();
 
     if (args.size() != 3)
         throw torrent::input_error("Expecting display, key, and commands.");
@@ -227,7 +224,7 @@ torrent::Object apply_ui_bind_key(rpc::target_type target, const torrent::Object
     if (key == '0' && keydef.size() != 1) {
         if (keydef.size() != 4)
             throw torrent::input_error("Bad key definition (expected 4 digit octal code).");
-        key = (int) strtol(keydef.c_str(), (char **) NULL, 8);
+        key = (int) strtol(keydef.c_str(), static_cast<char **>(NULL), 8);
     }
 
     // Look up display
@@ -250,7 +247,7 @@ torrent::Object apply_ui_bind_key(rpc::target_type target, const torrent::Object
     switch (displayType) {
         case ui::DownloadList::DISPLAY_DOWNLOAD_LIST:
             display->bindings()[key] =
-                _cxxstd_::bind(&ui::ElementDownloadList::receive_command, (ui::ElementDownloadList*)display,
+                _cxxstd_::bind(&ui::ElementDownloadList::receive_command, static_cast<ui::ElementDownloadList*>(display),
                                bound_commands[displayType][key].c_str());
             break;
         default:
@@ -540,195 +537,6 @@ torrent::Object cmd_string_len(rpc::target_type target, const torrent::Object::l
 }
 
 
-torrent::Object cmd_string_join(rpc::target_type target, const torrent::Object::list_type& args) {
-    std::string delim = string_get_first_arg("join", args);
-    std::string result;
-    torrent::Object::list_const_iterator first = args.begin() + 1, last = args.end();
-
-    for (torrent::Object::list_const_iterator itr = first; itr != last; ++itr) {
-        if (itr != first) result += delim;
-        rpc::print_object_std(&result, &*itr, 0);
-    }
-
-    return result;
-}
-
-
-torrent::Object cmd_string_strip(int where, const torrent::Object::list_type& args) {
-    std::string text = string_get_first_arg("[lr]strip", args);
-    torrent::Object::list_const_iterator first = args.begin() + 1, last = args.end();
-
-    if (args.size() == 1) {
-        // Strip whitespace
-        if (where <= 0) {
-            text.erase(text.begin(),
-                       std::find_if(text.begin(), text.end(), [](int ch) { return !std::isspace(ch); }));
-        }
-        if (where >= 0) {
-            text.erase(std::find_if(text.rbegin(), text.rend(), [](int ch) { return !std::isspace(ch); }).base(),
-                       text.end());
-        }
-    } else {
-        size_t lpos = 0, rpos = text.length();
-        bool changed;
-        do {
-            changed = false;
-            for (torrent::Object::list_const_iterator itr = first; itr != last; ++itr) {
-                const std::string& strippable = itr->as_string();
-                if (strippable.empty()) continue;
-
-                bool found;
-                do {
-                    found = false;
-
-                    if (where <= 0) {
-                        if (0 == strncmp(text.c_str() + lpos, strippable.c_str(), strippable.length())) {
-                            lpos += strippable.length();
-                            changed = found = true;
-                        }
-                    }
-                    if (where >= 0 && lpos <= rpos - strippable.length()) {
-                        if (0 == strncmp(text.c_str() + rpos - strippable.length(), strippable.c_str(), strippable.length())) {
-                            rpos -= strippable.length();
-                            changed = found = true;
-                        }
-                    }
-                } while (found && lpos < rpos);
-            }
-        } while (changed && lpos < rpos);
-        text = lpos < rpos ? text.substr(lpos, rpos - lpos) : "";
-    }
-
-    return text;
-}
-
-
-torrent::Object cmd_string_pad(bool at_end, const torrent::Object::list_type& args) {
-    std::string text;
-    if (args.size() > 0 && args.begin()->is_value()) {
-        char buf[65];
-        snprintf(buf, sizeof(buf), "%ld", (long)args.begin()->as_value());
-        text = buf;
-    } else {
-        text = string_get_first_arg("[lr]pad", args);
-    }
-
-    torrent::Object::list_const_iterator itr = args.begin() + 1;
-    int64_t pad_len = 0;
-    std::string filler;
-    if (itr != args.end()) pad_len = string_get_value_arg("[lr]pad(pad_len)", itr);
-    if (itr != args.end()) filler = (itr++)->as_string();
-    if (pad_len < 0)
-       throw torrent::input_error("string.[lr]pad: Invalid negative padding length!");
-    if (filler.empty()) filler = " ";
-    size_t text_len = u8_length(text), filler_len = u8_length(filler);
-
-    if (size_t(pad_len) > text_len) {
-        std::string pad;
-        size_t count = size_t(pad_len) - text_len;
-
-        if (filler.length() == 1) { // optimize the common case
-            pad.insert(0, count, filler.at(0));
-        } else while (count > 0) {
-            if (count >= filler_len) {
-                pad += filler;
-                count -= filler_len;
-            } else {
-                pad += u8_chop(filler, count);
-                count = 0;
-            }
-        }
-
-        return at_end ? text + pad : pad + text;
-    }
-
-    return text;
-}
-
-
-torrent::Object cmd_string_split(rpc::target_type target, const torrent::Object::list_type& args) {
-    const std::string text = string_get_first_arg("split", args);
-    if (args.size() != 2 || !args.rbegin()->is_string()) {
-        throw torrent::input_error("string.split needs a string argument.1!");
-    }
-    const std::string delim = args.rbegin()->as_string();
-    torrent::Object result = torrent::Object::create_list();
-    torrent::Object::list_type& resultList = result.as_list();
-
-    if (delim.length()) {
-        size_t pos = 0, next = 0;
-
-        while ((next = text.find(delim, pos)) != std::string::npos) {
-            resultList.push_back(text.substr(pos, next - pos));
-            pos = next + delim.length();
-        }
-        resultList.push_back(text.substr(pos));
-    } else {
-        std::mbstate_t mbs = std::mbstate_t();
-        const char* cpos = text.c_str();
-        int bytes = 0, skip;
-
-        while (*cpos && (skip = std::mbrlen(cpos, text.length() - bytes, &mbs)) > 0) {
-            resultList.push_back(std::string(cpos, skip));
-            cpos += skip;
-            bytes += skip;
-        }
-    }
-
-    return result;
-}
-
-
-torrent::Object cmd_string_substr(rpc::target_type target, const torrent::Object::list_type& args) {
-    const std::string text = string_get_first_arg("substr", args);
-
-    torrent::Object::list_const_iterator itr = args.begin() + 1;
-    int64_t glyphs = 0, count = text.length();
-    std::string fallback;
-    if (itr != args.end()) glyphs = string_get_value_arg("substr(pos)", itr);
-    if (itr != args.end()) count = string_get_value_arg("substr(count)", itr);
-    if (itr != args.end()) fallback = (itr++)->as_string();
-
-    if (count < 0) {
-       throw torrent::input_error("string.substr: Invalid negative count!");
-    }
-
-    std::mbstate_t mbs = std::mbstate_t();
-    const char* pos = text.c_str();
-    int bytes = 0, skip;
-
-    if (glyphs < 0) {
-        std::string::size_type offsets[text.length() + 1];
-        int64_t idx = 0;
-        while (*pos && (skip = std::mbrlen(pos, text.length() - bytes, &mbs)) > 0) {
-            offsets[idx++] = bytes;
-            pos += skip;
-            bytes += skip;
-        }
-        offsets[idx] = bytes;
-
-        int64_t begidx = std::max(idx + glyphs, (int64_t) 0);
-        int64_t endidx = std::min(idx, begidx + count);
-        return text.substr(offsets[begidx], offsets[endidx] - offsets[begidx]);
-    }
-
-    while (glyphs-- > 0 && *pos && (skip = std::mbrlen(pos, text.length() - bytes, &mbs)) > 0) {
-        pos += skip;
-        bytes += skip;
-    }
-    if (!*pos) return fallback;
-
-    int bytes_pos = bytes, bytes_count = 0;
-    while (count-- > 0 && *pos && (skip = std::mbrlen(pos, text.length() - bytes, &mbs)) > 0) {
-        pos += skip;
-        bytes += skip;
-        bytes_count += skip;
-    }
-
-    return text.substr(bytes_pos, bytes_count);
-}
-
-
 torrent::Object cmd_string_shorten(rpc::target_type target, const torrent::Object::list_type& args) {
     const std::string text = string_get_first_arg("shorten", args);
 
@@ -798,16 +606,6 @@ torrent::Object::value_type apply_string_contains(bool ignore_case, const torren
 }
 
 
-torrent::Object cmd_string_contains(rpc::target_type target, const torrent::Object::list_type& args) {
-    return apply_string_contains(false, args);
-}
-
-// XXX: Will NOT work correctly for non-ASCII strings!
-torrent::Object cmd_string_contains_i(rpc::target_type target, const torrent::Object::list_type& args) {
-    return apply_string_contains(true, args);
-}
-
-
 torrent::Object apply_string_mutate(int operation, const torrent::Object::list_type& args) {
     if (args.size() < 1) {
         throw torrent::input_error("string.* takes at least a string!");
@@ -835,15 +633,6 @@ torrent::Object apply_string_mutate(int operation, const torrent::Object::list_t
 
     return result;
 }
-
-torrent::Object cmd_string_map(rpc::target_type target, const torrent::Object::list_type& args) {
-    return apply_string_mutate(1, args);
-}
-
-torrent::Object cmd_string_replace(rpc::target_type target, const torrent::Object::list_type& args) {
-    return apply_string_mutate(2, args);
-}
-
 
 torrent::Object cmd_string_compare(int mode, const torrent::Object::list_type& args) {
     const char* opnames[] = {"equals", "startswith", "endswith"};
@@ -944,7 +733,7 @@ torrent::Object cmd_system_client_version_as_value() {
     const char* pos = PACKAGE_VERSION;
 
     while (*pos) {
-        result = 100 * result + strtol(pos, (char**)&pos, 10);
+        result = 100 * result + strtol(pos, const_cast<char**>(&pos), 10);
         if (*pos && *pos != '.')
             throw torrent::input_error("INTERNAL ERROR: Bad version " PACKAGE_VERSION);
         if (*pos) ++pos;
@@ -1001,22 +790,9 @@ void initialize_command_pyroscope() {
 
     // string.* group
     CMD2_ANY_LIST("string.len",         &cmd_string_len);
-    //CMD2_ANY_LIST("string.join",        &cmd_string_join);
-    //CMD2_ANY_LIST("string.split",       &cmd_string_split);
-    //CMD2_ANY_LIST("string.substr",      &cmd_string_substr);
     CMD2_ANY_LIST("string.shorten",     &cmd_string_shorten);
-    //CMD2_ANY_LIST("string.contains",    &cmd_string_contains);
-    //CMD2_ANY_LIST("string.contains_i",  &cmd_string_contains_i);
-    //CMD2_ANY_LIST("string.map",         &cmd_string_map);
-    //CMD2_ANY_LIST("string.replace",     &cmd_string_replace);
-    //CMD2_ANY_LIST("string.equals",      std::bind(&cmd_string_compare, 0, std::placeholders::_2));
     CMD2_ANY_LIST("string.startswith",  std::bind(&cmd_string_compare, 1, std::placeholders::_2));
     CMD2_ANY_LIST("string.endswith",    std::bind(&cmd_string_compare, 2, std::placeholders::_2));
-    //CMD2_ANY_LIST("string.strip",       std::bind(&cmd_string_strip,  0, std::placeholders::_2));
-    //CMD2_ANY_LIST("string.lstrip",      std::bind(&cmd_string_strip, -1, std::placeholders::_2));
-    //CMD2_ANY_LIST("string.rstrip",      std::bind(&cmd_string_strip,  1, std::placeholders::_2));
-    //CMD2_ANY_LIST("string.lpad",        std::bind(&cmd_string_pad, false, std::placeholders::_2));
-    //CMD2_ANY_LIST("string.rpad",        std::bind(&cmd_string_pad, true,  std::placeholders::_2));
 
     // array.* group
     CMD2_ANY_LIST("array.at",           &cmd_array_at);
@@ -1042,7 +818,7 @@ void initialize_command_pyroscope() {
     CMD2_DL_STRING("d.custom.as_value",  _cxxstd_::bind(&retrieve_d_custom_as_value, _cxxstd_::placeholders::_1, _cxxstd_::placeholders::_2));
 
     // Misc commands
-    CMD2_ANY("ui.bind_key", &apply_ui_bind_key);
+    CMD2_ANY("ui.bind_key",                &apply_ui_bind_key);
     CMD2_VAR_VALUE("ui.bind_key.verbose", 1);
     CMD2_ANY("throttle.names",             _cxxstd_::bind(&cmd_throttle_names));
     CMD2_DL("d.tracker_domain",            _cxxstd_::bind(&cmd_d_tracker_domain,         _cxxstd_::placeholders::_1));
