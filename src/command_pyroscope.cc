@@ -146,8 +146,8 @@ std::string get_active_tracker_domain(core::Download* download) {
         // snip url to domain name
         if (url.compare(0, 7, "http://")  == 0) url = url.substr(7);
         if (url.compare(0, 8, "https://") == 0) url = url.substr(8);
-        if (url.find('/') > 0) url.resize(url.find('/')); // url = url.substr(0, url.find('/'));
-        if (url.find(':') > 0) url.resize(url.find(':')); // url = url.substr(0, url.find(':'));
+        if (const auto pos = url.find('/'); pos != std::string::npos && pos > 0) url.resize(pos); // url = url.substr(0, url.find(':'));
+        if (const auto pos = url.find(':'); pos != std::string::npos && pos > 0) url.resize(pos); // url = url.substr(0, url.find(':'));
 
         // remove some common cruft
         const char* domain_cruft[] = {
