@@ -134,7 +134,8 @@ std::string elapsed_time(unsigned long dt, unsigned long t0) {
     const unsigned long threshold[] = {1, 60, 3600, 86400, 7*86400, 30*86400, 365*86400, 0};
 
     int dim = 0;
-    dt = (t0 ? t0 : time(NULL)) - dt;
+    t0 = t0 ? t0 : time(NULL);
+    dt = (t0 > dt) ? t0 - dt : dt - t0;
     if (dt == 0) return std::string("⋅ ⋅⋅ ");
     while (threshold[dim] && dt >= threshold[dim]) ++dim;
     if (dim) --dim;
@@ -398,7 +399,9 @@ void ui_pyroscope_download_list_redraw_item(Window* window, display::Canvas* can
         // left-justifying this also overwrites any junk from the original display that we overwrite
         int chars_left = canvas->width() - status_pos - item_status.length();
         if (chars_left < 0) {
-            item_status = item_status.substr(0, 1-chars_left) + "…";
+            item_status.resize(1-chars_left+1);
+            item_status.replace(1-chars_left+1, 1, "…");
+            //item_status = item_status.substr(0, 1-chars_left) + "…";
         } else if (chars_left > 0) {
             item_status = std::string(chars_left, ' ') + item_status;
         }
