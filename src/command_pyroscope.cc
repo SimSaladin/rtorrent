@@ -31,6 +31,7 @@
 #include "core/manager.h"
 #include "rpc/parse.h"
 #include <torrent/tracker/tracker.h>
+#include <torrent/utils/log.h>
 #include "ui/root.h"
 #include "ui/download_list.h"
 #include "ui/element_base.h"
@@ -291,9 +292,14 @@ torrent::Object cmd_ui_focus_end() {
 }
 
 
-static int ui_page_size() {
-    // TODO: map 0 to the current view size, for adaptive scrolling
-    return std::max(1, (int) rpc::call_command_value("ui.focus.page_size"));
+static unsigned int ui_page_size() {
+    unsigned int skip = std::max(0, (int) rpc::call_command_value("ui.focus.page_size"));
+    if (skip == 0) {
+        const auto* frame = control->display()->root_frame()->frame(1);
+        skip = (frame->height() - 6) / 2;
+        lt_log_print(torrent::LOG_DEBUG_TRACE, "using calculated default for ui.focus.page_size: %i", skip);
+    }
+    return skip;
 }
 
 
@@ -301,7 +307,7 @@ torrent::Object cmd_ui_focus_pgup() {
     ui::DownloadList* dl_list = control->ui()->download_list().get();
     core::View* dl_view = dl_list->current_view();
 
-    int skip = ui_page_size();
+    unsigned int skip = ui_page_size();
     if (!dl_view->empty_visible()) {
         if (dl_view->focus() == dl_view->end_visible())
             dl_view->set_focus(dl_view->end_visible() - 1);
@@ -320,7 +326,7 @@ torrent::Object cmd_ui_focus_pgdn() {
     ui::DownloadList* dl_list = control->ui()->download_list().get();
     core::View* dl_view = dl_list->current_view();
 
-    int skip = ui_page_size();
+    unsigned int skip = ui_page_size();
     if (!dl_view->empty_visible()) {
         if (dl_view->focus() == dl_view->end_visible())
             dl_view->set_focus(dl_view->begin_visible());
@@ -462,7 +468,7 @@ torrent::Object cmd_throttle_names() {
 
     resultList.push_back(std::string());
     for (core::ThrottleMap::const_iterator itr = control->core()->throttles().begin();
-         itr != control->core()->throttles().end(); itr++) {
+         itr != control->core()->throttles().end(); ++itr) {
        resultList.push_back(itr->first);
     }
 
